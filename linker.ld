@@ -1,32 +1,36 @@
-OUTPUT_ARCH(riscv)
-ENTRY(_start)
+OUTPUT_ARCH( "riscv" )
+ENTRY( _start )
 
-MEMORY {
-    RAM (rwx) : ORIGIN = 0x80000000, LENGTH = 128M
-}
+SECTIONS
+{
+  . = 0x80000000;
 
-SECTIONS {
-    . = 0x80000000;
+  .text : {
+    *(.text.init)
+    *(.text .text.*)
+  }
 
-    .text : {
-        boot/boot.o(.text)
-        *(.text*)
-    } > RAM
+  .rodata : ALIGN(8) { 
+    *(.rodata .rodata.*) 
+    *(.srodata .srodata.*)
+  }
 
-    .rodata : {
-        *(.rodata*)
-    } > RAM
+  .data : ALIGN(8) { 
+    *(.data .data.*) 
+    *(.sdata .sdata.*)
+    /* VERY IMPORTANT FOR -fPIC */
+    *(.got .got.*) 
+  }
 
-    .data : {
-        *(.data*)
-    } > RAM
+  .bss : ALIGN(8) {
+    _bss_start = .;
+    *(.sbss .sbss.*)
+    *(.bss .bss.*)
+    *(COMMON)
+    _bss_end = .;
+  }
 
-    .bss : {
-        _bss_start = .;
-        *(.bss*)
-        *(COMMON)
-        _bss_end = .;
-    } > RAM
-
-    _stack_top = ORIGIN(RAM) + LENGTH(RAM);
+  . = ALIGN(16);
+  . += 0x10000;
+  _stack_top = .;
 }

@@ -1,107 +1,145 @@
 # LuaOS Specification
-**Version:** 0.1-draft  
-**Target:** RISC-V 64-bit (rv64imac), QEMU virt machine  
+**Version:** 0.2-draft  
+**Target:** RISC-V 64-bit (rv64imac), QEMU virt machine (bare metal)  
 **Author:** SerArch  
 
 ---
 
-## 1. Concept
+## 1. Vision
 
-LuaOS is a bare-metal operating system for RISC-V where **Lua 5.5 is the kernel language**. The architecture is a minimal C runtime that boots the Lua VM, after which the entire OS — shell, drivers, filesystem, package manager, userspace — is written in Lua (or any language that compiles to Lua).
+LuaOS is a **language-centric bare-metal operating system** where the Lua VM is the universal runtime. The distinction between *OS* and *programming environment* is intentionally minimized — the language is the OS.
 
-The philosophy is identical to old Forth-based systems: **the language is the OS**. The shell is a Lua REPL. Scripts are Lua programs. Drivers are Lua modules. There is no context switch between "using the OS" and "programming the OS."
+> "A tiny JVM-like platform, but for Lua, running directly on bare metal in under 1MB."
 
-### Why this works
-- Lua 5.5 interpreter + stdlib = ~300KB of pure ANSI C, trivially portable
-- newlib + Lua statically linked = under 1MB total footprint
-- Lua is the fastest interpreted scripting language available
-- Lua's `lua_Alloc` is a single C function — the entire memory manager is one hook
-- Incremental GC (Lua 5.5) means no stop-the-world pauses in kernel code
-- The Lua VM is a near-universal compile target with a rich ecosystem of languages
+Unlike JavaOS (JVM, ~100MB, slow boot) or Singularity (CLR, managed overhead, GC in ring 0), LuaOS achieves the same "managed runtime as kernel" concept with a 300KB interpreter, instant boot, and manual GC control.
 
-### Comparison
-| OS | Language | Runtime size | Boot time |
-|----|----------|-------------|-----------|
-| JavaOS | Java | ~100MB (JVM) | Slow |
-| Singularity | C# | ~50MB (CLR) | Slow |
-| **LuaOS** | **Lua** | **~1MB** | **Instant** |
+### Design Principles
+- **Minimal core, maximal leverage** — reuse the Lua ecosystem instead of rebuilding it
+- **Language-first, OS-second** — the runtime IS the value proposition
+- **Pragmatism over purity** — POSIX-ish is fine, strict compliance is not the goal
+- **Fast iteration over premature complexity** — get to a working REPL, then build
+- **Separation of concerns via privilege modes, not language boundaries**
+- **Lua is the brain, C is the muscle**
 
 ---
 
 ## 2. Architecture
 
+### Execution Model
 ```
-┌─────────────────────────────────────┐
-│         Userspace / Shell           │  ← Pure Lua / any Lua-targeting lang
-├─────────────────────────────────────┤
-│         kernel.lua                  │  ← Teal-typed Lua kernel logic
-├─────────────────────────────────────┤
-│         Lua 5.5 VM (liblua.a)       │  ← C, compiled for rv64imac
-├─────────────────────────────────────┤
-│   newlib | uart.c | syscalls.c      │  ← Thin C glue layer
-├─────────────────────────────────────┤
-│         boot.S                      │  ← ~10 lines of RISC-V asm
-├─────────────────────────────────────┤
-│   OpenSBI (M-mode firmware)         │  ← Provided by QEMU
-├─────────────────────────────────────┤
-│   RISC-V hardware / QEMU virt       │
-└─────────────────────────────────────┘
+┌─────────────────────────────────────────┐
+│   Userspace processes (U-mode)          │  ← One Lua VM per process
+│   Lua / Teal / Haxe / Fennel / etc.     │
+├─────────────────────────────────────────┤
+│   kernel.lua (S-mode)                   │  ← Teal-typed kernel logic
+│   One trusted kernel Lua VM             │
+├─────────────────────────────────────────┤
+│   Lua 5.5 VM  (liblua.a)                │  ← Pure ANSI C, ~300KB
+├─────────────────────────────────────────┤
+│   lualibc (custom libc)                 │  ← Our own, not newlib
+│   uart.c | memory.c | syscalls.c        │
+├─────────────────────────────────────────┤
+│   boot.S (~10 lines RISC-V asm)         │
+├─────────────────────────────────────────┤
+│   OpenSBI (M-mode, provided by QEMU)    │
+└─────────────────────────────────────────┘
 ```
 
-### Boot sequence
-1. QEMU loads `luaos.elf` at `0x80000000`
-2. `boot.S` sets up stack, zeroes BSS, calls `kernel_main()`
-3. `kernel_main()` inits UART, inits newlib memory, creates Lua VM
-4. Lua VM loads `kernel.lua`
-5. `kernel.lua` starts the shell — you are now in Lua
+### Privilege Model
+- **M-mode:** OpenSBI — handles machine-level firmware, we never touch this
+- **S-mode:** LuaOS kernel — one trusted Lua VM, all kernel logic lives here
+- **U-mode:** User processes — one independent Lua VM per process
+
+### Why one VM per process
+- Strong crash isolation — a user process dying doesn't touch the kernel VM
+- ~300KB–1MB overhead per VM is negligible on any remotely modern system
+- Matches what developers expect from a process model
+- Clean security boundary between kernel and user code
 
 ---
 
-## 3. Language Stack
+## 3. Custom libc — lualibc
 
-LuaOS supports **any language that compiles to Lua** with zero additional runtime cost. Everything runs on the same 300KB VM.
+Newlib is not used. We write our own minimal libc (`lualibc`) tailored exactly to what the Lua VM needs and nothing else.
 
-### Tier 1 — Native (always available)
-| Language | Description | Use case |
-|----------|-------------|----------|
-| **Lua 5.5** | The base language | General purpose, userspace, scripting |
-| **Teal** | Typed Lua (TypeScript analogy) | Kernel code, drivers, safety-critical paths |
-| **C** (via FFI) | Direct hardware access | Hot paths, interrupt stubs, bare metal ops |
+### Why not newlib
+- Newlib assumes things about the environment we don't want to provide
+- ABI mismatch issues on bare metal
+- We only need ~15 functions. Newlib ships thousands.
+- Writing our own means we understand every line of the C layer
 
-### Tier 2 — Transpile-to-Lua
-| Language | Vibe | Use case |
-|----------|------|----------|
-| **Fennel** | Lisp with macros | Metaprogramming, DSLs, macro-heavy code |
-| **Urn** | Functional Lisp | Purist functional programming |
-| **MoonScript / Yuescript** | CoffeeScript for Lua | Concise OOP-style code (powers itch.io) |
-| **Haxe** | Typed, Java-like | Large projects, cross-platform code |
-| **Amulet** | ML/Haskell style | Functional, algebraic data types |
-| **LunarML** | Standard ML | Provably correct systems code |
+### Exact libc surface Lua 5.5 needs
 
-### The language pyramid
+Lua 5.5 is written in strict ANSI C89/C90 and needs roughly **40-50 libc functions** for the full stdlib, or as few as **15-20** for a minimal "Hello World" boot. This is entirely manageable.
+
+#### Tier 1 — Absolute minimum (core VM only, no stdlib)
+```c
+// memory — lua_newstate takes a custom allocator, removing malloc entirely
+malloc, realloc, free
+
+// string
+memcpy, memmove, memset, strlen, strchr, strcmp
+
+// error handling — Lua's exception system is built on these
+setjmp, longjmp
+
+// types only (header-only, no implementation needed)
+limits.h, stddef.h, stdarg.h
 ```
-C FFI          ← when you need bare metal right now
-Teal           ← when correctness is life-or-death (kernel)
-Lua            ← when you just want to get things done
-Fennel/Haxe/ML ← when you have opinions about programming languages
+**~15 functions.** This is enough to boot the VM and run Lua code.
+
+#### Tier 2 — Full stdlib (what we actually want)
+```c
+// I/O  (liolib.c) — hooked to our VFS
+fopen, fclose, fread, fwrite, fflush, fseek, ftell, setvbuf, remove, rename
+
+// Math (lmathlib.c) — delegated to libgcc soft-float
+sin, cos, tan, asin, acos, atan, ceil, floor, fmod, pow, sqrt, exp, log
+
+// OS   (loslib.c) — mostly stubbed, we don't have a real OS clock yet
+exit, getenv, clock, time, strftime, difftime
+
+// String extras (lstrlib.c)
+strpbrk, strcspn, strstr, sprintf, strncpy, strcmp
+
+// Character classification (lctype.c — Lua has its own, but uses these as fallback)
+isdigit, isspace, isalpha, isalnum, iscntrl, isxdigit
+```
+**~45 functions total.** Still very manageable.
+
+#### Lua 5.5 specific notes
+- `lua_newstate` accepts a **custom allocator function** — we pass our own, completely bypassing `malloc` if we want
+- `lmathlib.c` can be **excluded entirely** from the build if we don't need math (we do, but it's optional)
+- The new **external strings** feature may need custom alloc/dealloc hooks if used
+- `luaL_makeseed` needs a randomness source — stub it with a fixed seed for now, fix later
+
+### lualibc structure
+```
+libs/lualibc/
+├── include/
+│   ├── stdlib.h       ← malloc, free, realloc, exit, getenv (stub)
+│   ├── string.h       ← memcpy, memmove, memset, strlen, strcmp, etc.
+│   ├── stdio.h        ← fopen/fclose/fread/fwrite hooked to VFS + UART
+│   ├── math.h         ← delegates to libgcc soft-float intrinsics
+│   ├── setjmp.h       ← declares setjmp/longjmp
+│   ├── ctype.h        ← isdigit, isspace, isalpha, etc.
+│   ├── time.h         ← clock, time (stubbed for now)
+│   └── stdint.h / stddef.h / stdarg.h / stdbool.h  ← header-only
+├── src/
+│   ├── malloc.c       ← Phase 1: bump allocator. Phase 2: buddy allocator.
+│   ├── string.c       ← all string.h implementations
+│   ├── stdio.c        ← printf → UART, fopen/fread/fwrite → VFS stubs
+│   ├── ctype.c        ← character classification lookup table
+│   ├── math.c         ← thin wrappers over libgcc __adddf3 etc.
+│   ├── time.c         ← stubbed, returns 0 until we have a timer
+│   └── setjmp.S       ← RISC-V assembly, critical for Lua error handling
+└── lualibc.a
 ```
 
-All of these compile to Lua bytecode. Same VM. Zero overhead.
-
-### Teal's role
-Teal is the **kernel development language**. Its compiler (`tl.lua`) is a single dependency-free Lua file, meaning **the compiler ships inside the OS for free**.
-
-```teal
--- type checked driver interface, compile-time safety
-local record UARTDevice
-    base_addr: integer
-    baud_rate: integer
-    write: function(self: UARTDevice, data: string)
-    read: function(self: UARTDevice): string
-end
-```
-
-Type errors in kernel code are caught at compile time. At runtime it's just Lua.
+### malloc strategy
+- **Phase 1:** Bump allocator — pointer starts at `_bss_end`, increments on alloc, `free` is a no-op. Zero complexity, zero bugs, works for bootstrapping.
+- **Phase 2:** Replace with buddy allocator once the kernel is stable. Interface stays identical, Lua never knows the difference.
+- **Alternative:** Pass a custom allocator directly to `lua_newstate` and bypass libc malloc entirely for the VM. Best of both worlds for the kernel VM specifically.
 
 ---
 
@@ -109,35 +147,40 @@ Type errors in kernel code are caught at compile time. At runtime it's just Lua.
 
 ```
 LuaOS/
-├── Makefile                  ← Root build system
-├── linker.ld                 ← Memory layout (loads at 0x80000000)
-├── LuaOS_spec.md             ← This document
+├── Makefile
+├── linker.ld
+├── LuaOS_spec.md
 │
 ├── boot/
-│   └── boot.S                ← Assembly stub: stack setup, BSS zero, call kernel_main
+│   └── boot.S                  ← stack setup, BSS zero, → kernel_main
 │
 ├── kernel/
-│   ├── kernel.c              ← Entry point: init VM, load kernel.lua
-│   ├── uart.c / uart.h       ← 16550 UART driver (QEMU virt @ 0x10000000)
-│   ├── memory.c / memory.h   ← Memory manager (newlib sbrk stub → future PMM)
-│   ├── syscalls.c            ← Newlib syscall stubs (_sbrk, _write→UART, etc.)
-│   └── interrupts.c          ← (Phase 2) PLIC + timer interrupt handlers
+│   ├── kernel.c                ← VM init, load kernel.lua
+│   ├── uart.c / uart.h         ← 16550 UART @ 0x10000000
+│   ├── memory.c / memory.h     ← physical memory manager
+│   ├── interrupts.c            ← PLIC + CLINT handlers (Phase 2)
+│   └── trap.S                  ← RISC-V trap vector (Phase 2)
+│
+├── libs/
+│   └── lualibc/                ← custom libc
+│       ├── include/
+│       └── src/
 │
 ├── lua/
-│   └── (Lua 5.5 source tree, compiled as liblua.a)
+│   └── (Lua 5.5 source, compiled as liblua.a)
 │
-├── src/
-│   ├── kernel.lua            ← Main kernel logic (Teal-typed)
-│   ├── shell.lua             ← Interactive Lua REPL shell
-│   ├── fs.lua                ← Filesystem abstraction
-│   ├── drivers/
-│   │   ├── uart.lua          ← Lua-side UART wrapper
-│   │   └── fb.lua            ← Framebuffer driver (Phase 2)
-│   └── pkg/
-│       └── rocks.lua         ← Package manager
-│
-└── libs/
-    └── (custom C binding libraries)
+└── src/
+    ├── kernel.tl               ← Teal-typed kernel core
+    ├── shell.lua               ← Interactive REPL
+    ├── fs.lua                  ← VFS abstraction
+    ├── proc.lua                ← Process management
+    ├── sched.lua               ← Coroutine scheduler
+    ├── drivers/
+    │   ├── uart.lua            ← Lua-side UART wrapper
+    │   ├── fb.lua              ← Framebuffer (Phase 2)
+    │   └── virtio.lua          ← VirtIO block device (Phase 3)
+    └── pkg/
+        └── rocks.lua           ← Package manager
 ```
 
 ---
@@ -149,147 +192,143 @@ LuaOS/
 | `0x80000000` | RAM start — kernel loads here |
 | `0x10000000` | UART0 (16550) |
 | `0x0C000000` | PLIC (interrupt controller) |
-| `0x02000000` | CLINT (timer) |
+| `0x02000000` | CLINT (timer interrupts) |
 | `0x80000000 + 128MB` | Stack top |
 
----
-
-## 6. Build System
-
-### Toolchain
-| Tool | Package |
-|------|---------|
-| Compiler | `riscv64-elf-gcc` (Arch: `extra/riscv64-elf-gcc`) |
-| Binutils | `riscv64-elf-binutils` |
-| C library | `riscv64-elf-newlib` (at `/usr/riscv64-elf/lib/rv64imac/lp64/`) |
-| Emulator | `qemu-system-riscv64` |
-
-### Build targets
-```bash
-make          # build luaos.elf
-make run      # build and launch in QEMU
-make clean    # clean all build artifacts
+### Address space layout (eventual)
 ```
+0x80000000  kernel text/data/bss
+            ↓ kernel heap (lualibc malloc)
+            ...
+            ↑ kernel stack
+0x87FFFFFF  top of 128MB RAM
 
-### Compiler flags
-```
--march=rv64imac -mabi=lp64    # RISC-V 64-bit, integer ABI, no FPU
--ffreestanding                # no host OS assumptions
--nostdlib                     # we provide our own libc (newlib)
+User process virtual space (Sv39, Phase 3):
+0x00010000  user text
+            ↓ user heap
+            ...
+            ↑ user stack
+0x3FFFFFFF  user space top
 ```
 
 ---
 
-## 7. C Layer Details
+## 6. Language Stack
 
-The C layer has one job: **get the Lua VM running**. It is not the kernel. It is the VM host.
+Lua is not just a language here — it is the **execution IR**. Every language that compiles to Lua runs on LuaOS with zero additional runtime cost. One VM, infinite languages.
 
-### syscalls.c — Newlib integration
-Newlib requires syscall stubs to link. Key ones:
-- `_sbrk` — bump allocator starting at `_bss_end`, feeds `malloc`
-- `_write` — routes to `uart_putc`, making `printf` work
-- All others are no-ops or return -1
+### Tier 1 — Native
+| Language | Role |
+|----------|------|
+| **Lua 5.5** | The base runtime, userspace, scripting |
+| **Teal** | Typed kernel development (compiler = one Lua file, ships free) |
+| **C** (via FFI) | Bare metal escape hatch, hot paths, interrupt stubs |
 
-### uart.c — 16550 UART
-QEMU virt exposes a 16550-compatible UART at `0x10000000`. Polling-based for now (no interrupts until Phase 2). This is how `print()` works in the kernel.
+### Tier 2 — Transpile to Lua
+| Language | Vibe | Notable |
+|----------|------|---------|
+| **Fennel** | Lisp + macros | Popular in Neovim/gamedev, full macro system |
+| **Urn** | Purist functional Lisp | Heavy compile-time optimization |
+| **MoonScript / Yuescript** | CoffeeScript style | Powers itch.io in production |
+| **Haxe** | Typed, Java-like | Used in Dead Cells, huge stdlib |
+| **TypeScriptToLua** | TypeScript | Full TS type system → Lua |
+| **CSharp.lua** | C# | C# syntax compiling to Lua |
+| **LunarML** | Standard ML | Provably correct systems code |
+| **Amulet** | ML/Haskell | Algebraic data types, type inference |
+| **GopherLua / Gi** | Go-like | Go syntax on the Lua VM |
+| **p2lua** | Pascal | Pascal → Lua transpiler |
+| **Ruia / Ruby2Lua** | Ruby | Ruby syntax → Lua |
+| **RPy / Python-to-Luau** | Python subset | Python-flavored Lua target |
 
-### kernel.c — VM init
-```c
-void kernel_main(void) {
-    uart_init();
-    memory_init();
-    lua_State *L = luaL_newstate();
-    luaL_openlibs(L);
-    luaL_dofile(L, "kernel.lua");  // hand off to Lua forever
-    while(1);
-}
+### The language pyramid
+```
+C FFI             ← bare metal, hot paths, interrupt stubs
+Teal              ← kernel, drivers, safety-critical
+Lua               ← general purpose, userspace, most things
+Fennel / Urn      ← if you want Lisp macros
+Haxe / TS / C#    ← if you come from those ecosystems
+LunarML / Amulet  ← provably correct code
+Go / Python / Ruby ← if you really want to
 ```
 
-After `luaL_openlibs`, the entire Lua stdlib is available. After `luaL_dofile`, we are in Lua. The C layer is done.
+Every single one of these runs on the same 300KB VM. Zero additional runtime.
+
+### What this makes LuaOS
+LuaOS is a **universal language runtime platform** — conceptually similar to the JVM or CLR, but 300KB instead of 100MB+, instant boot, bare metal, no stop-the-world GC.
 
 ---
 
-## 8. Lua Standard Libraries (built-in)
+## 7. Kernel API (Lua-native)
 
-These ship with Lua 5.5 and are available from boot with zero additional code:
+The kernel exposes clean Lua-native APIs. POSIX exists only as a compatibility shim.
 
-| Library | What it gives us |
-|---------|-----------------|
-| `base` | print, pcall, type, pairs, ipairs, load, etc. |
-| `math` | Full math library |
-| `string` | String manipulation |
-| `table` | Table utilities |
-| `io` | File I/O (hooked to our VFS) |
-| `os` | OS interface (stubbed, we implement it) |
-| `coroutine` | Cooperative multitasking primitive |
-| `utf8` | Unicode support |
-| `debug` | Debug library |
+### Filesystem
+```lua
+fs.read(path)
+fs.write(path, data)
+fs.list(path)          -- returns table
+fs.mkdir(path)
+fs.delete(path)
+fs.exists(path)        -- returns bool
+fs.mount(device, path)
+```
 
-### Lua 5.5 improvements relevant to LuaOS
-- **60% more compact arrays** — less memory pressure on a 128MB system
-- **Incremental major GC** — no stop-the-world pauses in kernel code
-- **Read-only for-loop variables** — safer kernel loop patterns
-- **Global variable declarations** — explicit globals, catches typos at load time
+### Process
+```lua
+proc.spawn(path, args) -- returns pid
+proc.kill(pid)
+proc.exit(code)
+proc.list()            -- returns table of {pid, name, status}
+proc.wait(pid)
+```
 
----
+### Memory
+```lua
+mem.alloc(size)
+mem.free(ptr)
+mem.info()             -- returns {total, used, free}
+```
 
-## 9. Planned Lua Library Stack
-
-### Bundled with LuaOS (Phase 1-3)
-| Library | Purpose |
-|---------|---------|
-| `lua-cjson` | JSON parsing/serialization |
-| `LuaSocket` | Networking (TCP/UDP) |
-| `Penlight` | Extended stdlib (string utils, path handling, OOP) |
-| `LuaSec` | TLS support |
-| `lpeg` | Parsing expression grammars (best parser lib in existence) |
-| `luafilesystem` | Filesystem operations |
-| `tl.lua` | Teal compiler (ships free, it's just a Lua file) |
-
-### Available via package manager
-| Library | Purpose |
-|---------|---------|
-| `lsqlite3` | SQLite database |
-| `lua-zlib` | Compression |
-| `busted` | Testing framework |
-| `lua-async` / `cqueues` | Async I/O |
-| `lyaml` | YAML support |
-| `lua-messagepack` | MessagePack serialization |
-
-### Graphics (Phase 2+)
-| Library | Purpose |
-|---------|---------|
-| `fb.lua` | Raw framebuffer driver (pixels at a memory address) |
-| LÖVE-inspired API | 2D graphics, sprites, canvas — API design borrowed from LÖVE |
+### Network (Phase 3)
+```lua
+net.connect(addr, port)
+net.listen(port)
+net.send(sock, data)
+net.recv(sock)
+net.close(sock)
+```
 
 ---
 
-## 10. The Shell
+## 8. Shell
 
-The LuaOS shell is a Lua REPL with light shell sugar. It is **not bash**. There is no string soup. Every command returns actual typed data.
+The shell is a Lua REPL with minimal sugar. Not bash. Not sh. Lua.
 
 ### Philosophy
-```lua
--- bash version of "find lua files modified today"
--- find . -name "*.lua" -newer /tmp/ref 2>/dev/null | xargs grep "TODO" | wc -l
--- (pray it works, wonder why spaces broke it)
+Bash is string soup. It was never designed to be a programming language and it shows. Every command in LuaOS returns actual typed Lua data, not stdout text.
 
--- LuaOS version
-find("."):filter("%.lua$"):grep("TODO"):count()
+```lua
+-- bash: find . -name "*.lua" | xargs wc -l 2>/dev/null | tail -1
+-- (pray spaces don't break it)
+
+-- LuaOS:
+find("."):filter("%.lua$"):map(lines):sum()
+-- returns a number. always works.
 ```
 
-### Shell sugar (minimal additions over pure Lua)
+### Shell sugar
 ```lua
-$ ls              -- sugar for fs.ls()
-$ cd /home        -- sugar for fs.cd("/home")
-$ cat file.txt    -- sugar for fs.read("file.txt") |> print
+$ ls              -- fs.ls()
+$ cd /home        -- fs.cd("/home")
+$ cat file        -- fs.read("file") |> print
+$ run script.lua  -- dofile("script.lua")
 ```
 
-Everything else is just Lua. No mode switching. The shell IS the scripting language.
+Everything else is pure Lua. No mode switching. The shell IS the scripting language.
 
 ### Error handling
 ```lua
--- bash: command || echo "failed" && exit 1  (?????)
+-- bash: command || echo "failed" && exit 1
 
 -- LuaOS:
 local ok, err = pcall(dangerous_command)
@@ -298,99 +337,217 @@ if not ok then
 end
 ```
 
+### Scripting
+Any `.lua` file is a shell script. Any `.tl` file compiles via bundled Teal and runs. No shebangs, no chmod, no magic.
+
 ---
 
-## 11. Package Manager
+## 9. Process Model
 
-LuaOS packages are Lua modules. Installing a package is putting a `.lua` file on the path. The package manager is ~100 lines of Lua.
+Each process is an independent Lua VM running in U-mode.
 
-```lua
--- rocks.lua
-rocks.install("json")        -- fetches, verifies, installs
-rocks.remove("json")
-rocks.list()                 -- returns table of installed packages
-rocks.update()               -- update all
+### Lifecycle
+```
+proc.spawn("program.lua", args)
+  → allocate VM state (~300KB-1MB)
+  → load program into new VM
+  → schedule on coroutine scheduler
+  → run in U-mode
+  → on exit/crash: free VM, notify parent
 ```
 
-Package manifest format (inspired by LuaRocks):
+### Scheduling
+- **Phase 1:** Coroutine-based cooperative multitasking
+- **Phase 2:** Preemptive via CLINT timer interrupts
+
+```
+Timer interrupt (C trap handler)
+  → save current process state
+  → call sched.next() in kernel VM
+  → restore next process state
+  → return to U-mode
+```
+
+---
+
+## 10. POSIX Strategy
+
+Goal: **"POSIX enough for compatibility"**, not strict compliance.
+
+Behavior matters more than correctness. The goal is to make existing Lua ecosystem libraries work without modification, not to pass a POSIX test suite.
+
+### What we implement
+- File I/O: `open`, `read`, `write`, `close`, `seek`
+- Memory: `malloc`, `free` (via lualibc)
+- Process: `exit`, minimal stubs
+- Enough `stat` for `luafilesystem` to work
+
+### What we skip
+- Signals (stub `kill` to return -1)
+- Users/groups (everything is root, single-user OS)
+- Sockets at syscall level (we have `net.*` API)
+
+---
+
+## 11. Concurrency Model
+
+### Phase 1 — Cooperative
+Lua coroutines. Each process is a coroutine. Explicit yields between operations.
+
 ```lua
--- package.lua
+local function scheduler()
+    while true do
+        for _, proc in ipairs(process_table) do
+            if proc.status == "ready" then
+                coroutine.resume(proc.co)
+            end
+        end
+        coroutine.yield()
+    end
+end
+```
+
+### Phase 2 — Preemptive
+Timer interrupts via CLINT. C trap handler saves state, calls Lua scheduler, restores next process.
+
+### Event model
+```
+Hardware interrupt → C trap handler → event queued in kernel VM
+                                     → Lua scheduler wakes relevant process
+                                     → process handles event in Lua
+```
+
+---
+
+## 12. Bundled Libraries
+
+### Ships with LuaOS
+| Library | Purpose |
+|---------|---------|
+| `tl.lua` | Teal compiler (free — single Lua file) |
+| `lua-cjson` | JSON |
+| `Penlight` | Extended stdlib, path handling, OOP |
+| `lpeg` | Parsing expression grammars |
+| `luafilesystem` | Filesystem ops |
+
+### Available via package manager
+| Library | Purpose |
+|---------|---------|
+| `LuaSocket` | Networking |
+| `LuaSec` | TLS |
+| `lsqlite3` | SQLite |
+| `lua-zlib` | Compression |
+| `busted` | Testing |
+| `cqueues` | Async I/O |
+
+### Graphics (Phase 2+)
+| Library | Purpose |
+|---------|---------|
+| `fb.lua` | Raw framebuffer driver |
+| LÖVE-inspired API | 2D graphics, sprites, canvas |
+
+---
+
+## 13. Package Manager
+
+```lua
+rocks.install("package")
+rocks.remove("package")
+rocks.update()
+rocks.list()
+rocks.search("query")
+```
+
+Package manifest:
+```lua
 return {
-    name = "lua-cjson",
+    name    = "lua-cjson",
     version = "2.1.0",
-    deps = {},
-    files = { "cjson.lua", "cjson.so" }
+    deps    = {},
+    files   = { "cjson.lua" }
 }
 ```
 
+Installing a package = putting `.lua` files on the path. Package manager itself is ~100 lines of Lua.
+
 ---
 
-## 12. Development Roadmap
+## 14. Build System
 
-### Phase 1 — Boot (current)
+### Toolchain (Arch Linux)
+| Tool | Package |
+|------|---------|
+| `riscv64-elf-gcc` | `extra/riscv64-elf-gcc` |
+| `riscv64-elf-binutils` | `extra/riscv64-elf-binutils` |
+| `qemu-system-riscv64` | `extra/qemu-arch-extra` |
+
+### Compiler flags
+```makefile
+CROSS  = riscv64-elf-
+ARCH   = -march=rv64imac -mabi=lp64
+CFLAGS = $(ARCH) -ffreestanding -O2 -Wall \
+         -Ikernel -Ilua -Ilibs/lualibc/include
+```
+
+### Build targets
+```bash
+make        # build luaos.elf
+make run    # build + launch QEMU
+make clean  # clean artifacts
+```
+
+---
+
+## 15. Development Roadmap
+
+### Phase 1 — Boot *(current)*
 - [x] RISC-V assembly bootloader
-- [x] Newlib + Lua VM init
-- [x] UART output (`print()` works)
-- [ ] Lua VM boots and runs `kernel.lua`
-- [ ] Basic Lua REPL over UART
+- [x] UART driver (16550)
+- [x] Lua VM compiles for rv64imac
+- [ ] lualibc (replace newlib)
+- [ ] Lua VM boots, runs kernel.lua
+- [ ] `print()` works over UART
+- [ ] Basic Lua REPL
 
 ### Phase 2 — Foundation
 - [ ] Timer interrupts (CLINT)
-- [ ] UART receive interrupts (keyboard input)
-- [ ] Virtual filesystem (VFS) abstraction
-- [ ] Simple flat filesystem (ramdisk)
-- [ ] Persistent shell history
+- [ ] UART receive (keyboard input)
+- [ ] VFS + ramdisk
+- [ ] Coroutine-based process model
+- [ ] Teal bundled
 
-### Phase 3 — Usable OS
-- [ ] Framebuffer driver (640x480 minimum)
-- [ ] Package manager (rocks.lua)
-- [ ] LuaSocket port
-- [ ] Teal compiler bundled
-- [ ] Process model (coroutine-based cooperative multitasking)
+### Phase 3 — Usable
+- [ ] Framebuffer
+- [ ] Package manager
+- [ ] Preemptive scheduler
+- [ ] Virtual memory (Sv39)
+- [ ] Process isolation
 
 ### Phase 4 — Ecosystem
-- [ ] LuaJIT RISC-V backend (when mature)
+- [ ] LuaJIT RISC-V backend
 - [ ] Network stack
-- [ ] Display server
-- [ ] Self-hosting (LuaOS can develop LuaOS)
+- [ ] Self-hosting
 
 ---
 
-## 13. Performance Notes
+## 16. Performance
 
-LuaOS performance is not a concern in the ways people assume.
-
-- **Kernel workloads** are scheduling logic, I/O dispatch, table lookups — Lua handles these trivially
-- **Hot paths** (memcpy, crypto, DMA) are C bindings called from Lua — native speed
-- **No JIT initially** — stock Lua interpreter on RISC-V is fast enough for kernel work
-- **LuaJIT upgrade path** — swap in LuaJIT later; kernel.lua runs unchanged
-- **vs JavaOS/Singularity** — no JVM startup, no CLR startup, no stop-the-world GC in ring 0, 1MB vs 100MB
-
-The real performance win over managed-runtime OSes is **GC control**. Lua's GC is manually tunable via `lua_gc()`. You control when collection happens. Stop-the-world in ring 0 is not your problem.
+| Concern | Answer |
+|---------|--------|
+| Lua is slow | Fastest interpreted scripting language. Kernel workloads are I/O dispatch and logic, not compute. |
+| No JIT | Fine for now. LuaJIT is a drop-in upgrade. RISC-V backend in development. |
+| GC pauses | Lua 5.5 incremental GC. `lua_gc()` gives manual control. No stop-the-world in ring 0. |
+| Hot paths | C FFI. One call. Native speed. |
+| vs JavaOS | JVM startup + 100MB vs instant boot + 1MB. Not a competition. |
 
 ---
 
-## 14. Why RISC-V
+## 17. Self-Hosting
 
-- Clean ISA, no 35 years of x86 backwards compatibility garbage
-- x86 still boots in 16-bit real mode in 2026. this is a war crime.
-- RISC-V boot sequence: OpenSBI handles M-mode, your code starts in S-mode, done
-- The privileged ISA spec is actually readable
-- QEMU virt machine has a clean, well-documented memory map
-- RISC-V is eating the embedded/edge market — LuaOS's primary target
+The Teal compiler is a single Lua file. It ships inside the OS. You can write, compile, and run LuaOS software from inside LuaOS with zero external toolchain.
+
+This is the Forth insight applied forward: the OS and its development environment are the same thing.
 
 ---
 
-## 15. Self-Hosting Story
-
-LuaOS is **instantly self-hostable** from day one.
-
-Most OSes: install a cross-compiler, set up a sysroot, suffer for a week.
-
-LuaOS: write Lua. The development environment is the OS. Teal's compiler is a single Lua file that ships in the OS. You can write, compile, and run LuaOS software from inside LuaOS without any external tools.
-
-This is the Forth insight applied to a modern system: the OS and its development environment are the same thing.
-
----
-
-*"It's basically just Lua, but also C, but also Teal, but also every language that ever thought about targeting Lua, which is a surprising number of languages, all running in 1MB, booting instantly, on an ISA that doesn't make you want to cry."*
+*"A minimal RISC-V OS where Lua is the kernel language, Teal gives you type safety, C is the escape hatch, and every language that ever thought about targeting Lua — TypeScript, C#, Go, Python, Ruby, Standard ML, Haskell, Lisp, and more — runs on the same 300KB VM, booting in milliseconds, in under 1MB total."*
