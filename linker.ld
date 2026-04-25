@@ -7,33 +7,40 @@ MEMORY {
 
 SECTIONS {
     .text : {
-        KEEP(*(.text.boot))
+        *(.text.boot)
         *(.text .text.*)
     } > RAM
 
-    .rodata : { . = ALIGN(8); *(.rodata .rodata.*) } > RAM
-    
-    .data : { 
-        . = ALIGN(8); 
+    .rodata : {
+        *(.rodata .rodata.*)
+    } > RAM
+
+    /* Ramdisk image embedded at build time */
+    .ramdisk : {
+        . = ALIGN(8);
+        _ramdisk_start = .;
+        KEEP(*(.ramdisk))
+        _ramdisk_end = .;
+    } > RAM
+
+    .data : {
         PROVIDE(__global_pointer$ = . + 0x800);
-        *(.data .data.*) 
-        *(.sdata .sdata.*) 
+        *(.data .data.*)
+        *(.sdata .sdata.*)
     } > RAM
 
     .bss : {
-        . = ALIGN(8);
         __bss_start = .;
         *(.bss .bss.*)
         *(.sbss .sbss.*)
         *(COMMON)
-        . = ALIGN(8);
         __bss_end = .;
     } > RAM
 
-    . = ALIGN(16);
-    _end = .;
-    __end = .;
+    . = ALIGN(8);
+
     __heap_start = .;
-    __heap_end = ORIGIN(RAM) + LENGTH(RAM) - 0x100000;
-    _stack_top = ORIGIN(RAM) + LENGTH(RAM);
+    __heap_end   = ORIGIN(RAM) + LENGTH(RAM) - 0x10000;
+
+    _stack_top   = ORIGIN(RAM) + LENGTH(RAM);
 }
