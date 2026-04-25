@@ -3,6 +3,8 @@
 *.elf
 *.a
 *.map
+*.bin
+*.img
 
 # Lua build artifacts (in lua/)
 lua/*.o
