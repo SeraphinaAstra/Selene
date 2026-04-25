@@ -69,6 +69,8 @@ DISK_SIZE_MB = 64
 $(DISK_IMG):
 	dd if=/dev/zero of=$(DISK_IMG) bs=1M count=$(DISK_SIZE_MB)
 	mke2fs -t ext2 -L selene $(DISK_IMG)
+	find rootfs -mindepth 1 -type d | while read d; do e2mkdir $(DISK_IMG):/$${d#rootfs/}; done
+	find rootfs -type f | while read f; do e2cp $$f $(DISK_IMG):/$${f#rootfs/}; done
 
 run: $(TARGET) $(DISK_IMG)
 	qemu-system-riscv64 \
@@ -81,4 +83,7 @@ run: $(TARGET) $(DISK_IMG)
 	    -nographic
 
 clean:
-	rm -f $(TARGET) $(DISK_IMG) ramdisk.bin ramdisk.o *.o lua/*.o
+	rm -f $(TARGET) ramdisk.bin ramdisk.o *.o lua/*.o
+
+cleanall: clean
+	rm -f $(DISK_IMG)

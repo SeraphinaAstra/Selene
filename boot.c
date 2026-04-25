@@ -211,6 +211,35 @@ static int lua_prompt(lua_State *L) {
     return 0;
 }
 
+static int lua_readkey(lua_State *L) {
+    int c = uart_getc(NULL);
+    if (c == 27) {  /* escape sequence */
+        int c2 = uart_getc(NULL);
+        if (c2 == '[') {
+            int c3 = uart_getc(NULL);
+            switch (c3) {
+                case 'A': lua_pushstring(L, "UP");    return 1;
+                case 'B': lua_pushstring(L, "DOWN");  return 1;
+                case 'C': lua_pushstring(L, "RIGHT"); return 1;
+                case 'D': lua_pushstring(L, "LEFT");  return 1;
+                case 'H': lua_pushstring(L, "HOME");  return 1;
+                case 'F': lua_pushstring(L, "END");   return 1;
+                case '3':
+                    uart_getc(NULL); /* consume ~ */
+                    lua_pushstring(L, "DEL"); return 1;
+                default:
+                    lua_pushstring(L, "ESC"); return 1;
+            }
+        }
+        lua_pushstring(L, "ESC");
+        return 1;
+    }
+    /* Return single char as string */
+    char s[2] = { (char)c, 0 };
+    lua_pushstring(L, s);
+    return 1;
+}
+
 /* --- REPL ----------------------------------------------------------- */
 
 static void repl(lua_State *L) {
@@ -283,6 +312,7 @@ void boot(void) {
     lua_register(L, "rd_list", lua_rd_list);
     lua_register(L, "readline", lua_readline);
     lua_register(L, "prompt", lua_prompt);
+    lua_register(L, "readkey", lua_readkey);
 
     virtio_register(L);
 
