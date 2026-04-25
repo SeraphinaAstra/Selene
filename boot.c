@@ -1,3 +1,4 @@
+/* boot.c — boot loader */
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
@@ -12,6 +13,8 @@ extern char __heap_end;
 /* Ramdisk symbols from linker.ld */
 extern char _ramdisk_start;
 extern char _ramdisk_end;
+
+extern void virtio_register(lua_State *L);
 
 /* --- Ramdisk ------------------------------------------------------- */
 
@@ -280,6 +283,8 @@ void boot(void) {
     lua_register(L, "rd_list", lua_rd_list);
     lua_register(L, "readline", lua_readline);
     lua_register(L, "prompt", lua_prompt);
+
+    virtio_register(L);
 
     if (rd_valid) {
         rd_register_searcher(L);

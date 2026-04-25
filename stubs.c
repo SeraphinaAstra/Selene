@@ -1,3 +1,4 @@
+/* stubs.c — Stub Functions */
 #include <stdio.h>
 #include <sys/stat.h>
 #include <sys/time.h>
