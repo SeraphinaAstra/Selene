@@ -1,11 +1,46 @@
 #include <stdio.h>
 #include <string.h>
+#include <stdint.h>
 #include "lua.h"
 #include "lualib.h"
 #include "lauxlib.h"
 
-// We'll use this to read one char at a time bypasses library buffering
-extern int uart_getc(FILE *file); 
+extern int uart_getc(FILE *file);
+extern char __heap_start;
+extern char __heap_end;
+
+/* --- Hardware Access Features --- */
+
+// peek32(addr)
+static int lua_peek32(lua_State *L) {
+    uintptr_t addr = (uintptr_t)luaL_checkinteger(L, 1);
+    uint32_t val = *(volatile uint32_t*)addr;
+    lua_pushinteger(L, (lua_Integer)val);
+    return 1;
+}
+
+// poke32(addr, val)
+static int lua_poke32(lua_State *L) {
+    uintptr_t addr = (uintptr_t)luaL_checkinteger(L, 1);
+    uint32_t val = (uint32_t)luaL_checkinteger(L, 2);
+    *(volatile uint32_t*)addr = val;
+    return 0;
+}
+
+// sysinfo()
+static int lua_sysinfo(lua_State *L) {
+    lua_newtable(L);
+    
+    lua_pushstring(L, "arch");
+    lua_pushstring(L, "riscv64-unknown-elf");
+    lua_settable(L, -3);
+    
+    lua_pushstring(L, "heap_kb");
+    lua_pushinteger(L, (&__heap_end - &__heap_start) / 1024);
+    lua_settable(L, -3);
+    
+    return 1;
+}
 
 void boot(void) {
     char buffer[256];
@@ -14,18 +49,26 @@ void boot(void) {
     printf("\n--- Selene (SNK) booting ---\n");
 
     lua_State *L = luaL_newstate();
-    if (!L) { while(1); }
+    if (!L) {
+        printf("CRITICAL: Failed to init Lua state\n");
+        while(1);
+    }
+    
     luaL_openlibs(L);
+
+    /* Register OS commands */
+    lua_register(L, "peek32", lua_peek32);
+    lua_register(L, "poke32", lua_poke32);
+    lua_register(L, "sysinfo", lua_sysinfo);
 
     printf("Lua 5.4 Ready\n> ");
     fflush(stdout);
 
     while (1) {
-        // Raw read
         int c = uart_getc(NULL);
 
         if (c == '\r' || c == '\n') {
-            printf("\r\n"); // Visual newline
+            printf("\r\n");
             buffer[idx] = '\0';
             
             if (idx > 0) {
@@ -48,7 +91,7 @@ void boot(void) {
         } 
         else if (idx < 255) {
             buffer[idx++] = (char)c;
-            putchar(c); // Echo back
+            putchar(c);
             fflush(stdout);
         }
     }
