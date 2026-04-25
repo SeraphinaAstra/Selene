@@ -494,7 +494,6 @@ The Teal compiler is a single Lua file. It ships inside Selene. You can write, c
 - [ ] Process isolation (U-mode)
 
 ### Phase 4 — Ecosystem
-- [ ] LuaJIT RISC-V backend
 - [ ] Network stack
 - [ ] Self-hosting
 
