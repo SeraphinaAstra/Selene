@@ -46,8 +46,14 @@ static int uart_putc(char c, FILE *file) {
     return (unsigned char)c;
 }
 
+static int uart_flush(FILE *file) {
+    (void)file;
+    /* UART is always flushed when putc returns, nothing to do */
+    return 0;
+}
+
 /* Picolibc Glue */
-static FILE uart_stdio = FDEV_SETUP_STREAM(uart_putc, uart_getc, NULL, _FDEV_SETUP_RW);
+static FILE uart_stdio = FDEV_SETUP_STREAM(uart_putc, uart_getc, uart_flush, _FDEV_SETUP_RW);
 FILE *const stdin = &uart_stdio;
 __strong_reference(stdin, stdout);
 __strong_reference(stdin, stderr);

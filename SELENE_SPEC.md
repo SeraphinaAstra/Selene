@@ -34,7 +34,7 @@ Selene is a **Script-Native Kernel (SNK)** — a class of OS where a high-level 
 │   Userspace processes (U-mode)          │  ← One Lua VM per process
 │   Lua / Teal / Fennel / Haxe / etc.     │
 ├─────────────────────────────────────────┤
-│   nyx/core.tl (S-mode)                  │  ← Teal-typed kernel logic (Nyx)
+│   nyx/core.lua (S-mode)                 │  ← Kernel logic (Nyx)
 │   One trusted kernel Lua VM             │
 ├─────────────────────────────────────────┤
 │   Lua 5.5 VM  (liblua.a)                │  ← Pure ANSI C, ~300KB
@@ -134,7 +134,7 @@ selene/
 ├── lua/
 │   └── (Lua 5.5 source — lua.c and luac.c excluded at compile time)
 └── nyx/
-    ├── core.tl      ← Teal-typed kernel core (Phase 2+)
+    ├── core.lua     ← Kernel core (plain Lua)
     ├── shell.lua    ← Interactive REPL
     ├── fs.lua       ← VFS abstraction
     ├── proc.lua     ← Process management
@@ -217,12 +217,12 @@ Lua is not just a language here — it is the **execution IR**. Every language t
 | Language | Role |
 |----------|------|
 | **Lua 5.5** | Base runtime, userspace, scripting |
-| **Teal** | Typed kernel development — compiler is one Lua file, ships free |
 | **C** | Hardware shim, hot paths, interrupt stubs |
 
 ### Tier 2 — Transpile to Lua
 | Language | Vibe |
 |----------|------|
+| **Teal** | Typed kernel development — compiler is one Lua file, ships free |
 | **Fennel** | Lisp + macros, popular in Neovim/gamedev |
 | **MoonScript / Yuescript** | CoffeeScript style, powers itch.io |
 | **Haxe** | Typed, Java-like, used in Dead Cells |
@@ -233,7 +233,7 @@ Lua is not just a language here — it is the **execution IR**. Every language t
 ### The language pyramid
 ```
 C                 ← bare metal, hot paths, interrupt stubs
-Teal              ← kernel (Nyx), drivers, safety-critical
+Teal              ← drivers, safety-critical
 Lua               ← general purpose, userspace, most things
 Fennel            ← if you want Lisp macros
 Haxe / TS         ← if you come from those ecosystems
@@ -302,15 +302,21 @@ find("."):filter("%.lua$"):map(lines):sum()
 -- returns a number. always works.
 ```
 
-### Shell sugar
+The shell is a standard Lua REPL. Builtins are exposed as global functions directly. No command parser, no shell syntax sugar exists or is planned.
+
+Usage examples:
 ```lua
-$ ls            -- fs.list(".")
-$ cd /home      -- fs.cd("/home")
-$ cat file      -- fs.read("file") |> print
-$ run script    -- dofile("script.lua")
+ls()                -- list current directory
+read("/init.lua")   -- read file contents
+run("/bin/ls.lua")  -- execute program
+mem()               -- show memory stats
+sys()               -- show system info
+ps()                -- list running processes
+ver()               -- show version
+help()              -- show help
 ```
 
-Everything else is pure Lua. No mode switching. The shell IS the scripting language.
+No mode switching. The shell IS the scripting language. Everything you type is valid Lua.
 
 ### Error handling
 ```lua
@@ -321,7 +327,7 @@ end
 ```
 
 ### Scripting
-Any `.lua` file is a shell script. Any `.tl` file compiles via the bundled Teal compiler and runs. No shebangs, no chmod, no magic.
+Any `.lua` file is a shell script.
 
 ---
 
@@ -407,11 +413,9 @@ No traditional UID/GID in the kernel. Identity is a Lua-side metadata table owne
 ### Ships with Selene
 | Library | Purpose |
 |---------|---------|
-| `tl.lua` | Teal compiler (single Lua file, free) |
 | `lua-cjson` | JSON |
 | `Penlight` | Extended stdlib, path handling, OOP |
 | `lpeg` | Parsing expression grammars |
-| `luafilesystem` | Filesystem ops |
 
 ### Available via package manager
 | Library | Purpose |
@@ -461,15 +465,9 @@ Installing a package = putting `.lua` files on the path. The package manager its
 
 ---
 
-## 18. Self-Hosting
+## 18. Development Roadmap
 
-The Teal compiler is a single Lua file. It ships inside Selene. You can write, compile, and run Selene software from inside Selene with zero external toolchain. This is the Forth insight applied forward: the OS and its development environment are the same thing.
-
----
-
-## 19. Development Roadmap
-
-### Phase 1 — Boot *(complete)*
+### Phase 1 — Boot
 - [x] RISC-V assembly entry point (`entry.S`) — gp init, FPU enable, BSS clear, stack align
 - [x] UART driver + picolibc stdio hooks (`stubs.c`)
 - [x] CLINT-backed `os.time()` and `os.clock()`
@@ -478,20 +476,28 @@ The Teal compiler is a single Lua file. It ships inside Selene. You can write, c
 - [x] Interactive REPL with backspace, error recovery
 - [x] `peek32` / `poke32` / `sysinfo` registered as kernel globals
 
+*No further changes required for Phase 1.*
+
 ### Phase 2 — Foundation
-- [ ] Timer interrupts (CLINT)
+- [x] VFS + ramdisk (flat SLNE format, packed by tools/mkrd.py, linked via objcopy)
+- [x] Load nyx/shell.lua from ramdisk at boot
+- [x] Coroutine-based process model (nyx/sched.lua)
+- [x] Process API (nyx/proc.lua)
+- [x] Kernel core (nyx/core.lua — plain Lua, Teal dropped)
+- [x] Shell builtins: `ls()`, `read(path)`, `run(path)`, `mem()`, `sys()`, `ps()`, `ver()`, `help()`
 - [ ] UART receive (keyboard input)
-- [ ] VFS + ramdisk
-- [ ] Load `nyx/core.tl` from ramdisk
-- [ ] Coroutine-based process model
-- [ ] Teal bundled
 
 ### Phase 3 — Usable
+- [ ] VirtIO block device driver (nyx/drivers/virtio.lua)
+- [ ] Timer interrupts
+- [ ] ext2 filesystem driver (nyx/fs/ext2.lua)
+- [ ] VFS wired up (nyx/fs.lua stops being a stub)
+- [ ] Writable filesystem unlocks self-hosting (text editor, `run()` already exists)
+- [ ] Preemptive scheduler via CLINT timer interrupts
+- [ ] Virtual memory (Sv39)
+- [ ] Process isolation (U-mode, one Lua VM per process)
 - [ ] Framebuffer
 - [ ] Package manager
-- [ ] Preemptive scheduler
-- [ ] Virtual memory (Sv39)
-- [ ] Process isolation (U-mode)
 
 ### Phase 4 — Ecosystem
 - [ ] Network stack

@@ -176,6 +176,38 @@ static int lua_sysinfo(lua_State *L) {
     return 1;
 }
 
+static int lua_readline(lua_State *L) {
+    static char buf[256];
+    int idx = 0;
+
+    while (1) {
+        int c = uart_getc(NULL);
+
+        if (c == '\r' || c == '\n') {
+            printf("\r\n");
+            buf[idx] = '\0';
+            lua_pushstring(L, buf);
+            return 1;
+        } else if (c == 8 || c == 127) {
+            if (idx > 0) {
+                idx--;
+                printf("\b \b");
+                fflush(stdout);
+            }
+        } else if (idx < 255) {
+            buf[idx++] = (char)c;
+            putchar(c);
+            fflush(stdout);
+        }
+    }
+}
+
+static int lua_prompt(lua_State *L) {
+    printf("> ");
+    fflush(stdout);
+    return 0;
+}
+
 /* --- REPL ----------------------------------------------------------- */
 
 static void repl(lua_State *L) {
@@ -246,9 +278,23 @@ void boot(void) {
     /* Ramdisk globals + searcher */
     lua_register(L, "rd_find", lua_rd_find);
     lua_register(L, "rd_list", lua_rd_list);
+    lua_register(L, "readline", lua_readline);
+    lua_register(L, "prompt", lua_prompt);
 
     if (rd_valid) {
         rd_register_searcher(L);
+
+        /* Load kernel core */
+        uint32_t core_size = 0;
+        const char *core = rd_find("nyx/core.lua", &core_size);
+        if (core) {
+            if (luaL_loadbuffer(L, core, core_size, "@nyx/core.lua") == LUA_OK) {
+                if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
+                    printf("core.lua error: %s\n", lua_tostring(L, -1));
+                    lua_pop(L, 1);
+                }
+            }
+        }
 
         /* Try to hand off to nyx/shell.lua */
         uint32_t size = 0;
