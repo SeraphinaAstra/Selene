@@ -1,42 +1,49 @@
-# --- Toolchain ---
-CC = riscv64-elf-gcc
-AR = riscv64-elf-ar
-RANLIB = riscv64-elf-ranlib
-QEMU = qemu-system-riscv64
+CROSS   = riscv64-unknown-elf-
+CC      = $(CROSS)gcc
+OBJCOPY = $(CROSS)objcopy
 
-# --- Flags ---
-ARCH = -march=rv64imac_zicsr -mabi=lp64 -mcmodel=medany -mno-relax
-CFLAGS = $(ARCH) -ffreestanding -nostdlib -fno-stack-protector -fno-builtin -O2 -Ikernel -Ilua
-LDFLAGS = -T linker.ld -nostdlib -static -Wl,--no-relax
+ARCH    = -march=rv64gc -mabi=lp64d -mcmodel=medany
 
-# --- Files ---
-LUA_LIB = lua/liblua.a
-OBJS = boot/boot.o kernel/kernel.o kernel/uart.o kernel/libc.o kernel/memory.o
-LIBGCC_PATH = $(shell $(CC) $(CFLAGS) -print-libgcc-file-name)
+# CFLAGS for picolibc freestanding environment
+CFLAGS  = $(ARCH) \
+          --specs=picolibc.specs \
+          -ffreestanding \
+          -nostartfiles \
+          -O2 -Wall -Wextra \
+          -I./lua
 
-all: luaos.elf
+LDFLAGS = -T linker.ld
 
-$(LUA_LIB):
-	$(MAKE) -C lua a \
-		CC="$(CC)" \
-		AR="$(AR) rcu" \
-		RANLIB="$(RANLIB)" \
-		MYCFLAGS="$(CFLAGS) -DLUA_32BITS -DLUA_USE_C89"
+# Gather Lua sources (excluding standalone entry points)
+LUA_SRCS = $(filter-out lua/lua.c lua/luac.c, $(wildcard lua/*.c))
+OS_SRCS  = boot.c stubs.c
+ASM_SRCS = entry.S
 
-%.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+# Generate object file list
+OBJS = $(ASM_SRCS:.S=.o) $(OS_SRCS:.c=.o) $(LUA_SRCS:.c=.o)
 
-boot/boot.o: boot/boot.S
-	$(CC) $(CFLAGS) -c $< -o $@
-
-luaos.elf: $(OBJS) $(LUA_LIB)
-	$(CC) $(CFLAGS) $(LDFLAGS) -Wl,--start-group $(OBJS) $(LUA_LIB) -Wl,--end-group -o luaos.elf
-
-run: luaos.elf
-	$(QEMU) -machine virt -cpu rv64 -smp 1 -m 128M -nographic -serial mon:stdio -kernel luaos.elf
-
-clean:
-	rm -f $(OBJS) luaos.elf
-	$(MAKE) -C lua clean
+TARGET = selene.elf
 
 .PHONY: all run clean
+
+all: $(TARGET)
+
+$(TARGET): $(OBJS)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+%.o: %.S
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+run: $(TARGET)
+	qemu-system-riscv64 \
+		-machine virt \
+		-m 128M \
+		-bios none \
+		-kernel $(TARGET) \
+		-nographic
+
+clean:
+	rm -f $(OBJS) $(TARGET)
