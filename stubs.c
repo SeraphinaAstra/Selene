@@ -40,7 +40,7 @@ int uart_getc(FILE *file) {
     return (unsigned char)UART0_RBR;
 }
 
-static int uart_putc(char c, FILE *file) {
+int uart_putc(char c, FILE *file) {
     (void)file;
     while ((UART0_LSR & 0x20) == 0);
     UART0_THR = c;

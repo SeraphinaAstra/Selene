@@ -32,34 +32,34 @@ local function editor(path)
     end
 
     local function draw()
-        print("\27[2J\27[H")
+        putstr("\27[2J\27[H")
         -- Header
-        print("\27[1;1H")
+        putstr("\27[1;1H")
         local title = "  edit: " .. path .. (dirty and " [+]" or "")
         local hint  = " ^S save  ^Q quit "
         local pad   = string.rep(" ", math.max(0, W - #title - #hint))
-        print("\27[7m" .. title .. pad .. hint .. "\27[0m")
+        putstr("\27[7m" .. title .. pad .. hint .. "\27[0m")
 
         -- Text
         for i = 1, EDIT_H do
             local li = i + scroll
-            print("\27[" .. (i+1) .. ";1H")
+            putstr("\27[" .. (i+1) .. ";1H")
             if li <= #lines then
                 local line = lines[li]:sub(1, W)
-                print(line .. "\27[K")
+                putstr(line .. "\27[K")
             else
-                print("\27[K")
+                putstr("\27[K")
             end
         end
 
         -- Status
-        print("\27[" .. H .. ";1H")
+        putstr("\27[" .. H .. ";1H")
         local pos  = string.format("  Ln %d/%d  Col %d  ", cy, #lines, cx)
         local spad = string.rep(" ", math.max(0, W - #pos - #status))
-        print("\27[7m" .. status .. spad .. pos .. "\27[0m")
+        putstr("\27[7m" .. status .. spad .. pos .. "\27[0m")
 
         -- Cursor
-        print("\27[" .. (cy - scroll + 1) .. ";" .. cx .. "H")
+        putstr("\27[" .. (cy - scroll + 1) .. ";" .. cx .. "H")
         status = ""
     end
 
@@ -157,8 +157,8 @@ local function editor(path)
         end
     end
 
-    print("\27[2J\27[H")
-    print("edit: closed " .. path)
+    putstr("\27[2J\27[H")
+    putstr("edit: closed " .. path .. "\r\n")
 end
 
 local path = ...

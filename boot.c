@@ -7,6 +7,7 @@
 #include "lauxlib.h"
 
 extern int uart_getc(FILE *file);
+extern int uart_putc(char c, FILE *file);
 extern char __heap_start;
 extern char __heap_end;
 
@@ -211,6 +212,15 @@ static int lua_prompt(lua_State *L) {
     return 0;
 }
 
+static int lua_putstr(lua_State *L) {
+    size_t len;
+    const char *s = luaL_checklstring(L, 1, &len);
+    for (size_t i = 0; i < len; i++) {
+        uart_putc(s[i], NULL);
+    }
+    return 0;
+}
+
 static int lua_readkey(lua_State *L) {
     int c = uart_getc(NULL);
     if (c == 27) {  /* escape sequence */
@@ -313,6 +323,7 @@ void boot(void) {
     lua_register(L, "readline", lua_readline);
     lua_register(L, "prompt", lua_prompt);
     lua_register(L, "readkey", lua_readkey);
+    lua_register(L, "putstr", lua_putstr);
 
     virtio_register(L);
 

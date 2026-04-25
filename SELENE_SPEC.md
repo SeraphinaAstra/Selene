@@ -1,8 +1,8 @@
 # Selene Specification
-**Version:** 0.3-draft  
+**Version:** 0.4-draft  
 **Target:** RISC-V 64-bit (rv64gc), QEMU virt machine (bare metal)  
 **Kernel:** Nyx  
-**Classification:** Script-Native Kernel (SNK)  
+**Classification:** Script-Native Kernel (SNK)
 
 ---
 
@@ -86,6 +86,7 @@ RISC-V assembly entry point. Does five things in order: initializes the `gp` (gl
 Initializes the Lua VM via `luaL_newstate()` and `luaL_openlibs()`, registers hardware access globals, then runs the REPL loop entirely in C. The loop reads characters from UART directly via `uart_getc()`, handles backspace, buffers input, and calls `luaL_dostring()` on each completed line. Error messages are printed and the stack is cleaned before the next prompt.
 
 Three globals are registered at boot time and available in every Lua session: `peek32(addr)` reads a 32-bit MMIO register, `poke32(addr, val)` writes one, and `sysinfo()` returns a table containing the target arch string and available heap in KB.
+Three additional globals are registered for terminal and editor support: putstr(s) writes a raw string to UART with no newline appended, used by full-screen Lua programs that need precise cursor control; readkey() reads one keypress and returns either a printable character or a named string for special keys (UP, DOWN, LEFT, RIGHT, HOME, END, DEL, ESC), handling multi-byte ANSI escape sequences transparently.
 
 ### stubs.c
 Picolibc glue and hardware stubs. Contains:
@@ -131,19 +132,26 @@ selene/
 ├── entry.S          ← RISC-V entry, stack setup, BSS clear, → boot()
 ├── boot.c           ← VM init, hands off to nyx/
 ├── stubs.c          ← picolibc stdio hooks (UART), _exit
+├── virtio.c         ← VirtIO block device driver (C-side queue management, DMA, interrupt handling)
 ├── lua/
 │   └── (Lua 5.5 source — lua.c and luac.c excluded at compile time)
-└── nyx/
-    ├── core.lua     ← Kernel core (plain Lua)
-    ├── shell.lua    ← Interactive REPL
-    ├── fs.lua       ← VFS abstraction
-    ├── proc.lua     ← Process management
-    ├── sched.lua    ← Coroutine scheduler
-    └── drivers/
-        ├── uart.lua     ← Lua-side UART wrapper
-        ├── fb.lua       ← Framebuffer (Phase 2)
-        └── virtio.lua   ← VirtIO block device (Phase 3)
+├── nyx/
+│   ├── core.lua     ← Kernel core (plain Lua)
+│   ├── shell.lua    ← Interactive REPL
+│   ├── fs.lua       ← ext2 filesystem driver — superblock, block groups, inodes, directory entries, block allocator
+│   ├── proc.lua     ← Process management
+│   ├── sched.lua    ← Coroutine scheduler
+│   └── drivers/
+│       ├── uart.lua     ← Lua-side UART wrapper
+│       ├── fb.lua       ← Framebuffer (Phase 2)
+│       └── virtio.lua   ← VirtIO block device (Phase 3)
+└── rootfs/
+    ├── bin/
+    │   └── edit.lua     ← screen editor, loaded from ext2 at runtime
+    └── home/            ← user home directory, empty at build time
 ```
+
+rootfs/ is the source of truth for the ext2 disk image. At build time, make strips the rootfs/ prefix and copies all files into the image at their corresponding absolute paths using e2cp and e2mkdir.
 
 ### Why lua.c and luac.c are excluded
 Both contain a `main()` function. Since we provide our own entry point via `entry.S` → `boot()`, including either would cause a linker conflict. We drive the Lua VM directly via `luaL_newstate()` and `luaL_openlibs()` instead.
@@ -256,8 +264,10 @@ fs.list(path)           -- returns table
 fs.mkdir(path)
 fs.delete(path)
 fs.exists(path)         -- returns bool
-fs.mount(device, path)
+fs.mount()
 ```
+
+In the current implementation mount targets the single virtio block device and ext2 is the only supported filesystem.
 
 ### Process
 ```lua
@@ -314,9 +324,12 @@ sys()               -- show system info
 ps()                -- list running processes
 ver()               -- show version
 help()              -- show help
+edit(path)          -- open screen editor
 ```
 
 No mode switching. The shell IS the scripting language. Everything you type is valid Lua.
+
+When a line fails to parse as Lua, the shell extracts the first word and attempts to load /bin/<word>.lua from the ext2 filesystem. This only runs if the disk is mounted. Builtins defined in shell.lua are always available regardless of mount state and serve as the recovery baseline — if the disk is unreadable, the operator can still use fread, fwrite, mount, and all other builtins to diagnose and repair the system.
 
 ### Error handling
 ```lua
@@ -458,7 +471,6 @@ Installing a package = putting `.lua` files on the path. The package manager its
 | Concern | Answer |
 |---------|--------|
 | Lua is slow | Fastest interpreted scripting language. Kernel workloads are I/O dispatch and logic, not compute. |
-| No JIT | Fine for now. LuaJIT is a drop-in upgrade. RISC-V backend in development. |
 | GC pauses | Lua 5.5 incremental GC. `lua_gc()` gives manual control. No stop-the-world in ring 0. |
 | Hot paths | C FFI. One call. Native speed. |
 | vs JavaOS | JVM startup + 100MB vs instant boot + ~1MB. Not a competition. |
@@ -485,14 +497,17 @@ Installing a package = putting `.lua` files on the path. The package manager its
 - [x] Process API (nyx/proc.lua)
 - [x] Kernel core (nyx/core.lua — plain Lua, Teal dropped)
 - [x] Shell builtins: `ls()`, `read(path)`, `run(path)`, `mem()`, `sys()`, `ps()`, `ver()`, `help()`
-- [ ] UART receive (keyboard input)
+- [x] UART receive (keyboard input)
 
 ### Phase 3 — Usable
-- [ ] VirtIO block device driver (nyx/drivers/virtio.lua)
+- [x] VirtIO block device driver (nyx/drivers/virtio.lua)
 - [ ] Timer interrupts
-- [ ] ext2 filesystem driver (nyx/fs/ext2.lua)
-- [ ] VFS wired up (nyx/fs.lua stops being a stub)
-- [ ] Writable filesystem unlocks self-hosting (text editor, `run()` already exists)
+- [x] ext2 filesystem driver (nyx/fs/ext2.lua)
+- [x] VFS wired up (nyx/fs.lua stops being a stub)
+- [x] Writable filesystem unlocks self-hosting (text editor, `run()` already exists)
+- [x] /bin/ command search path on ext2 with shell builtins as fallback safety net
+- [x] Screen editor (/bin/edit.lua) — ANSI cursor control, readkey(), putstr(), ^S save, ^Q quit with unsaved-changes guard
+- [x] Self-hosting
 - [ ] Preemptive scheduler via CLINT timer interrupts
 - [ ] Virtual memory (Sv39)
 - [ ] Process isolation (U-mode, one Lua VM per process)
@@ -501,7 +516,6 @@ Installing a package = putting `.lua` files on the path. The package manager its
 
 ### Phase 4 — Ecosystem
 - [ ] Network stack
-- [ ] Self-hosting
 
 ---
 
