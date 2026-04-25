@@ -61,7 +61,7 @@ void boot(void) {
     lua_register(L, "poke32", lua_poke32);
     lua_register(L, "sysinfo", lua_sysinfo);
 
-    printf("Lua 5.4 Ready\n> ");
+    printf("Lua 5.5 Ready\n> ");
     fflush(stdout);
 
     while (1) {

@@ -1,0 +1,19 @@
+# Build artifacts
+*.o
+*.elf
+*.a
+*.map
+
+# Lua build artifacts (in lua/)
+lua/*.o
+
+# Editor junk
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS junk
+.DS_Store
+Thumbs.db

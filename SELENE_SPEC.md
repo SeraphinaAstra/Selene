@@ -80,13 +80,23 @@ The SNK model makes one deliberate trade: raw systems performance for extreme ex
 The C layer is intentionally thin. Its only job is to get the hardware into a known state and hand off to the Lua VM. It is not "the kernel" — Nyx is.
 
 ### entry.S
-RISC-V assembly entry point. Sets the stack pointer via `_stack_top` (defined in `linker.ld`), zeroes BSS using `__bss_start`/`__bss_end`, then calls `boot()`. If `boot()` ever returns, halts with `wfi`. About 20 lines total.
+RISC-V assembly entry point. Does five things in order: initializes the `gp` (global pointer) register with relaxation temporarily disabled — required for picolibc's linker relaxation to function correctly, without it global variable access silently breaks; sets `sp` to `_stack_top` and aligns it to 16 bytes per the RISC-V ABI; explicitly enables the FPU by setting the FS bits in `mstatus` — required on rv64gc since float instructions will trap until this is done; zeroes BSS using `__bss_start`/`__bss_end`; then calls `boot()`. Halts with `wfi` if `boot()` ever returns.
 
 ### boot.c
-Initializes the Lua VM via `luaL_newstate()` and `luaL_openlibs()`, then hands off to Nyx. Does not contain OS logic — that lives in `nyx/`. In Phase 1 this drops into an embedded REPL loop; in Phase 2+ it loads `nyx/core.tl` from the ramdisk.
+Initializes the Lua VM via `luaL_newstate()` and `luaL_openlibs()`, registers hardware access globals, then runs the REPL loop entirely in C. The loop reads characters from UART directly via `uart_getc()`, handles backspace, buffers input, and calls `luaL_dostring()` on each completed line. Error messages are printed and the stack is cleaned before the next prompt.
+
+Three globals are registered at boot time and available in every Lua session: `peek32(addr)` reads a 32-bit MMIO register, `poke32(addr, val)` writes one, and `sysinfo()` returns a table containing the target arch string and available heap in KB.
 
 ### stubs.c
-Picolibc I/O hooks. Wires picolibc's stdio to the QEMU virt UART using the correct picolibc pattern — a `FILE` struct initialized with `FDEV_SETUP_STREAM` containing `putc`/`getc` function pointers, assigned to `stdin`/`stdout`/`stderr`. This is not the newlib-style `_write`/`_read` shim pattern and those will not work with picolibc. Also provides `_exit` as an infinite loop.
+Picolibc glue and hardware stubs. Contains:
+
+**UART I/O** — `uart_putc`/`uart_getc` poll the 16550 LSR register directly. Wired to picolibc stdio via `FDEV_SETUP_STREAM` and assigned to `stdin`/`stdout`/`stderr`. `write()` also inserts `\r` before `\n` for terminal compatibility.
+
+**Memory** — `_sbrk` implemented manually with explicit bounds checking against `__heap_end`. Returns `ENOMEM` and `-1` if the heap would overflow rather than silently corrupting memory.
+
+**Timing** — `times()` and `gettimeofday()` are backed by the CLINT `mtime` register at `0x0200bff8`, running at 10MHz. This is what makes `os.time()` and `os.clock()` return real values rather than zero.
+
+**POSIX stubs** — `open`, `close`, `read`, `write`, `lseek`, `fstat`, `unlink`, `rename` are all stubbed to satisfy the linker. `read` on `STDIN_FILENO` is functional via UART. Everything else returns `-1` with an appropriate `errno` until the VFS exists.
 
 ---
 
@@ -108,7 +118,7 @@ yay -S riscv64-unknown-elf-picolibc
 ```
 
 ### Heap management
-Picolibc's built-in sbrk reads `__heap_start` and `__heap_end` from the linker script. We define these to cover everything between BSS end and a 64KB stack reservation at the top of RAM. No `_sbrk` implementation needed in `stubs.c`.
+`_sbrk` is implemented manually in `stubs.c` with bounds checking against `__heap_end` from the linker script. The heap runs from `__heap_start` (immediately after BSS) to `__heap_end` (128MB RAM top minus 64KB stack reservation). Attempting to grow past `__heap_end` returns `ENOMEM` rather than silently overwriting the stack.
 
 ---
 
@@ -459,13 +469,14 @@ The Teal compiler is a single Lua file. It ships inside Selene. You can write, c
 
 ## 19. Development Roadmap
 
-### Phase 1 — Boot *(current)*
-- [x] RISC-V assembly entry point (`entry.S`)
-- [x] UART driver via picolibc stdio hooks (`stubs.c`)
-- [x] Lua 5.5 VM compiles for rv64gc
-- [ ] `boot.c` initializes VM, drops into REPL
-- [ ] `print()` works over UART
-- [ ] Basic interactive Lua REPL
+### Phase 1 — Boot *(complete)*
+- [x] RISC-V assembly entry point (`entry.S`) — gp init, FPU enable, BSS clear, stack align
+- [x] UART driver + picolibc stdio hooks (`stubs.c`)
+- [x] CLINT-backed `os.time()` and `os.clock()`
+- [x] Lua 5.5 VM boots on rv64gc
+- [x] `print()` works over UART
+- [x] Interactive REPL with backspace, error recovery
+- [x] `peek32` / `poke32` / `sysinfo` registered as kernel globals
 
 ### Phase 2 — Foundation
 - [ ] Timer interrupts (CLINT)
