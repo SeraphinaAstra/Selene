@@ -6,6 +6,11 @@
 #include <unistd.h>
 #include <stdint.h>
 
+#define UART0_BASE  0x10000000
+#define UART0_THR   (*(volatile char*)(UART0_BASE + 0x00))
+#define UART0_RBR   (*(volatile char*)(UART0_BASE + 0x00))
+#define UART0_LSR   (*(volatile char*)(UART0_BASE + 0x05))
+
 extern char __heap_start;
 extern char __heap_end;
 static char *hptr = &__heap_start;
@@ -32,7 +37,7 @@ static int uart_putc(char c, FILE *file) {
     return (unsigned char)c;
 }
 
-static int uart_getc(FILE *file) {
+int uart_getc(FILE *file) {
     (void)file;
     while ((UART0_LSR & 0x01) == 0);
     return (unsigned char)UART0_RBR;
@@ -43,17 +48,40 @@ FILE *const stdin = &uart_stdio;
 __strong_reference(stdin, stdout);
 __strong_reference(stdin, stderr);
 
+/* The "Greedy" Read Stub */
 ssize_t read(int fd, void *buf, size_t count) {
     if (fd == STDIN_FILENO) {
         char *ptr = (char *)buf;
-        for (size_t i = 0; i < count; i++) {
+        size_t i = 0;
+
+        while (i < count) {
+            // Raw hardware read
             char c = (char)uart_getc(NULL);
+
+            // Handle Backspace
+            if (c == 8 || c == 127) {
+                if (i > 0) {
+                    i--;
+                    uart_putc('\b', NULL);
+                    uart_putc(' ', NULL);
+                    uart_putc('\b', NULL);
+                }
+                continue;
+            }
+
+            // Map CR to LF for Lua
             if (c == '\r') c = '\n';
-            ptr[i] = c;
-            uart_putc(c, NULL); 
-            if (c == '\n') return i + 1;
+
+            // Echo character
+            uart_putc(c, NULL);
+            if (c == '\n') uart_putc('\r', NULL);
+
+            ptr[i++] = c;
+
+            // If we hit a newline, return the buffer to fgets
+            if (c == '\n') return i;
         }
-        return count;
+        return i;
     }
     return -1;
 }
