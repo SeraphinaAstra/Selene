@@ -1,5 +1,7 @@
 -- nyx/shell.lua
 -- Selene recovery shell + interactive REPL
+-- Mirrors output to UART and framebuffer.
+-- Uses raw getchar() for live line editing and echoes typed input to both.
 
 local _fs = nil
 local function getfs()
@@ -7,16 +9,121 @@ local function getfs()
     return _fs
 end
 
+local fb = nil
+local function getfb()
+    if not fb then
+        fb = require("nyx.drivers.fb")
+        if fb.init then
+            pcall(fb.init)
+        end
+    end
+    return fb
+end
+
 if _mounted == nil then _mounted = false end
 if _cwd == nil then _cwd = "/" end
 
+local old_print = print
+
+local function uart_write(s)
+    s = tostring(s or "")
+    if type(putstr) == "function" then
+        s = s:gsub("\n", "\r\n")
+        putstr(s)
+    else
+        old_print(s)
+    end
+end
+
+local function fb_write(s)
+    local m = getfb()
+    if m and m.write then
+        m.write(s)
+    end
+end
+
+local function console_write(s)
+    uart_write(s)
+    fb_write(s)
+end
+
+local function console_print(...)
+    local n = select("#", ...)
+    if n == 0 then
+        console_write("\n")
+        return
+    end
+
+    local parts = {}
+    for i = 1, n do
+        parts[i] = tostring(select(i, ...))
+    end
+    console_write(table.concat(parts, " ") .. "\n")
+end
+
+_G.print = console_print
+
 local function resolve_path(path)
-    if path:sub(1,1) == "/" then return path end
+    if path:sub(1, 1) == "/" then return path end
     if _cwd == "/" then return "/" .. path end
     return _cwd .. "/" .. path
 end
 
--- ── Builtins ─────────────────────────────────────────────────────────
+local function fb_backspace()
+    local m = getfb()
+    if m and m.backspace then
+        m.backspace()
+        return true
+    end
+    return false
+end
+
+local function fb_putc(ch)
+    local m = getfb()
+    if not m then return end
+    if m.putc then
+        m.putc(ch)
+    elseif m.write then
+        m.write(ch)
+    end
+end
+
+local function tty_readline()
+    local line = ""
+    console_write("> ")
+
+    while true do
+        local c = getchar()
+        if c == nil then
+            return nil
+        end
+
+        if c == 13 or c == 10 then
+            console_write("\n")
+            return line
+
+        elseif c == 8 or c == 127 then
+            if #line > 0 then
+                line = line:sub(1, -2)
+                uart_write("\b \b")
+                fb_backspace()
+            end
+
+        elseif c == 9 then
+            for _ = 1, 4 do
+                line = line .. " "
+                uart_write(" ")
+                fb_putc(" ")
+            end
+
+        elseif c >= 32 and c < 127 then
+            local ch = string.char(c)
+            line = line .. ch
+            uart_write(ch)
+            fb_putc(ch)
+        end
+    end
+end
 
 function mount()
     if _mounted then print("already mounted"); return end
@@ -41,7 +148,6 @@ function rdread(path)
 end
 
 function run(path, ...)
-    -- disk first, ramdisk as fallback
     local data
     path = resolve_path(path)
     if _mounted then
@@ -52,10 +158,14 @@ function run(path, ...)
         data = rd_find(path)
     end
     if not data then
-        print("run: not found: " .. tostring(path)); return
+        print("run: not found: " .. tostring(path))
+        return
     end
     local fn, err = load(data, "@" .. path)
-    if not fn then print("run: " .. tostring(err)); return end
+    if not fn then
+        print("run: " .. tostring(err))
+        return
+    end
     local ok, res = pcall(fn, ...)
     if not ok then print("run error: " .. tostring(res)) end
 end
@@ -83,7 +193,7 @@ end
 function cd(path)
     if not path then rawset(_G, "_cwd", "/"); return end
     local target
-    if path:sub(1,1) == "/" then
+    if path:sub(1, 1) == "/" then
         target = path
     elseif _cwd == "/" then
         target = "/" .. path
@@ -132,7 +242,7 @@ function ver()
 end
 
 function help()
-    print("Selene recovery shell -- Lua is the shell")
+    print("Selene recovery shell -- Lua shell mirrored to UART + framebuffer")
     print("")
     print("always available:")
     print("  sys()                 system info")
@@ -155,45 +265,44 @@ function help()
     print("  edit(path)            screen editor")
     print("  /bin/<cmd>.lua        disk commands")
     print("")
-    print("disk commands (after mount):")
-    print("  cp(src, dst)          copy file")
-    print("  mv(src, dst)          move/rename file")
-    print("  rm(path)              delete file")
-    print("  mkdir(path)           create directory")
-    print("  pwd                   print working directory")
-    print("  df                    disk usage")
-    print("  uname                 system info")
-    print("  clear                 clear screen")
-    print("  hexdump(path)         hex dump file")
-    print("  wc(path)              word/line/byte count")
-    print("  grep(pattern, path)   search file")
-    print("")
     print("everything else is valid Lua")
 end
 
--- ── REPL ─────────────────────────────────────────────────────────────
+local function execute_line(line)
+    local fn, err = load(line)
+    if fn then
+        local ok, res = pcall(fn)
+        if not ok then
+            print("Error: " .. tostring(res))
+        elseif res ~= nil then
+            print(res)
+        end
+        return
+    end
 
-while true do
-    prompt()
-    local line = readline()
-    if not line then break end
-    if #line > 0 then
-        local fn, err = load(line)
-        if fn then
-            local ok, res = pcall(fn)
-            if not ok then
-                print("Error: " .. tostring(res))
-            elseif res ~= nil then
-                print(res)
-            end
-        else
-            local word = line:match("^%s*(%w+)")
-            if word and _mounted then
-                local ok, runerr = pcall(run, "/bin/" .. word .. ".lua")
-                if not ok then print("unknown: " .. word) end
-            else
-                print("Error: " .. tostring(err))
-            end
+    local word = line:match("^%s*(%w+)")
+    if word and _mounted then
+        local ok, runerr = pcall(run, "/bin/" .. word .. ".lua")
+        if not ok then print("unknown: " .. word) end
+    else
+        print("Error: " .. tostring(err))
+    end
+end
+
+function shell_start()
+    local m = getfb()
+    if m and m.clear then
+        pcall(m.clear)
+    end
+
+    print("Selene recovery shell -- Lua is the shell")
+    print("Type help() for commands")
+
+    while true do
+        local line = tty_readline()
+        if not line then break end
+        if #line > 0 then
+            execute_line(line)
         end
     end
 end

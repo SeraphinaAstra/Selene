@@ -219,6 +219,23 @@ function fb.set_cursor(x, y)
     cursor_y = math.max(0, math.min(ROWS - 1, y or 0))
 end
 
+function fb.backspace()
+    ensure_init()
+
+    if cursor_x == 0 and cursor_y == 0 then
+        return
+    end
+
+    local row = cursor_y + 1
+    local line = lines[row] or ""
+
+    if #line > 0 then
+        lines[row] = line:sub(1, -2)
+        cursor_x = math.max(0, cursor_x - 1)
+        render_all()
+    end
+end
+
 function fb.putc(c)
     ensure_init()
 
