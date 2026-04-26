@@ -1,0 +1,1 @@
+print(_cwd or "/")

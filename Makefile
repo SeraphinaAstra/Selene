@@ -15,7 +15,7 @@ LDFLAGS = -T linker.ld
 # Lua sources — exclude standalone tool entry points
 LUA_SRCS = $(filter-out lua/lua.c lua/luac.c, $(wildcard lua/*.c))
 
-OS_SRCS  = boot.c stubs.c virtio.c
+OS_SRCS  = boot.c stubs.c virtio.c virtio_gpu.c
 ASM_SRCS = entry.S
 
 OBJS = $(ASM_SRCS:.S=.o) \
@@ -74,13 +74,15 @@ $(DISK_IMG):
 
 run: $(TARGET) $(DISK_IMG)
 	qemu-system-riscv64 \
-	    -machine virt \
-	    -m 128M \
-	    -bios none \
-	    -kernel $(TARGET) \
-	    -drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
-	    -device virtio-blk-pci,drive=hd0 \
-	    -nographic
+		-machine virt \
+		-m 128M \
+		-bios none \
+		-kernel $(TARGET) \
+		-drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
+		-device virtio-blk-pci,drive=hd0 \
+		-device virtio-gpu-device \
+		-display sdl \
+		-serial "mon:stdio"
 
 clean:
 	rm -f $(TARGET) ramdisk.bin ramdisk.o *.o lua/*.o

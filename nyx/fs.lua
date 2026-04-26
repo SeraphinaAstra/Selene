@@ -447,10 +447,95 @@ function fs.exists(path)
     return resolve(path) ~= nil
 end
 
+function fs.delete(path)
+    if not mounted then return nil, "not mounted" end
+    
+    local parent_ino, name = resolve_parent(path)
+    if not parent_ino then return nil, "parent not found" end
+    
+    local parent_inode = get_inode(parent_ino)
+    if not parent_inode then return nil, "bad parent inode" end
+    
+    local entries = read_dir(parent_inode)
+    for _, e in ipairs(entries) do
+        if e.name == name then
+            -- Found entry, zero it out
+            for _, blk in ipairs(parent_inode.blocks) do
+                if blk == 0 then break end
+                local data = read_block(blk)
+                if not data then break end
+                
+                local pos = e.pos
+                -- Zero inode number to mark as deleted
+                data = data:sub(1, pos-1) .. string.rep("\0", 4) .. data:sub(pos+5)
+                write_block(blk, data)
+                return true
+            end
+        end
+    end
+    
+    return nil, "not found"
+end
+
+function fs.mkdir(path)
+    if not mounted then return nil, "not mounted" end
+    
+    local parent_ino, name = resolve_parent(path)
+    if not parent_ino then return nil, "parent dir not found" end
+    
+    -- Check if already exists
+    if resolve(path) then return nil, "already exists" end
+    
+    -- Allocate inode for new directory
+    local ino = alloc_inode(0)
+    if not ino then return nil, "no free inodes" end
+    
+    -- Allocate block for directory contents
+    local blk = alloc_block(0)
+    if not blk then return nil, "no free blocks" end
+    
+    local dir_inode = {
+        mode   = 0x41ED,  -- directory, 0755
+        size   = 1024,
+        blocks = {blk, 0,0,0,0,0,0,0,0,0,0,0},
+        _group = 0,
+        _index = (ino - 1) % sb.inodes_per_group,
+        _boff  = math.floor(((ino-1) % sb.inodes_per_group) / math.floor(1024 / sb.inode_size)),
+        _itbl  = get_group_desc(0).inode_table,
+        _off   = ((ino-1) % sb.inodes_per_group % math.floor(1024 / sb.inode_size)) * sb.inode_size + 1,
+    }
+    
+    write_inode(ino, dir_inode)
+    
+    -- Add directory entry to parent
+    local ok, err = add_dir_entry(get_inode(parent_ino), ino, name, 2)
+    if not ok then return nil, "dir entry failed: " .. tostring(err) end
+    
+    return true
+end
+
 function fs.info()
-    if not mounted then print("not mounted"); return end
-    print(string.format("blocks: %d  inodes: %d  block_size: %d  groups: %d",
-        sb.block_count, sb.inode_count, sb.block_size, sb.group_count))
+    if not mounted then return nil, "not mounted" end
+    -- sum free blocks across all groups
+    local free_blocks = 0
+    local free_inodes = 0
+    for g = 0, sb.group_count - 1 do
+        local gd = get_group_desc(g)
+        if gd then
+            free_blocks = free_blocks + gd.free_blocks
+            free_inodes = free_inodes + gd.free_inodes
+        end
+    end
+    return {
+        block_count      = sb.block_count,
+        block_size       = sb.block_size,
+        blocks_per_group = sb.blocks_per_group,
+        inodes_per_group = sb.inodes_per_group,
+        inode_count      = sb.inode_count,
+        group_count      = sb.group_count,
+        free_blocks      = free_blocks,
+        free_inodes      = free_inodes,
+    }
 end
 
 return fs

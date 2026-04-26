@@ -16,6 +16,7 @@ extern char _ramdisk_start;
 extern char _ramdisk_end;
 
 extern void virtio_register(lua_State *L);
+extern void virtio_gpu_register(lua_State *L);
 
 /* --- Ramdisk ------------------------------------------------------- */
 
@@ -326,6 +327,7 @@ void boot(void) {
     lua_register(L, "putstr", lua_putstr);
 
     virtio_register(L);
+    virtio_gpu_register(L);
 
     if (rd_valid) {
         rd_register_searcher(L);
@@ -339,22 +341,6 @@ void boot(void) {
                     printf("core.lua error: %s\n", lua_tostring(L, -1));
                     lua_pop(L, 1);
                 }
-            }
-        }
-
-        /* Try to hand off to nyx/shell.lua */
-        uint32_t size = 0;
-        const char *shell = rd_find("nyx/shell.lua", &size);
-        if (shell) {
-            printf("Lua 5.5 Ready\n");
-            if (luaL_loadbuffer(L, shell, size, "@nyx/shell.lua") == LUA_OK) {
-                if (lua_pcall(L, 0, 0, 0) != LUA_OK) {
-                    printf("nyx/shell.lua error: %s\n", lua_tostring(L, -1));
-                    lua_pop(L, 1);
-                }
-            } else {
-                printf("nyx/shell.lua load error: %s\n", lua_tostring(L, -1));
-                lua_pop(L, 1);
             }
         }
     } else {

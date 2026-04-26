@@ -130,25 +130,34 @@ selene/
 ├── Makefile
 ├── linker.ld
 ├── entry.S          ← RISC-V entry, stack setup, BSS clear, → boot()
-├── boot.c           ← VM init, hands off to nyx/
-├── stubs.c          ← picolibc stdio hooks (UART), _exit
-├── virtio.c         ← VirtIO block device driver (C-side queue management, DMA, interrupt handling)
+├── boot.c           ← VM init, registers globals, hands off to nyx/
+├── stubs.c          ← picolibc stdio hooks (UART), _sbrk, POSIX stubs
+├── virtio.c         ← VirtIO block device driver (C-side queue management, DMA, descriptor ring)
 ├── lua/
 │   └── (Lua 5.5 source — lua.c and luac.c excluded at compile time)
 ├── nyx/
 │   ├── core.lua     ← Kernel core (plain Lua)
-│   ├── shell.lua    ← Interactive REPL
-│   ├── fs.lua       ← ext2 filesystem driver — superblock, block groups, inodes, directory entries, block allocator
+│   ├── shell.lua    ← Recovery shell + interactive REPL, builtins, /bin/ dispatch
+│   ├── fs.lua       ← ext2 driver — superblock, block groups, inodes, directory entries, block allocator
 │   ├── proc.lua     ← Process management
 │   ├── sched.lua    ← Coroutine scheduler
 │   └── drivers/
 │       ├── uart.lua     ← Lua-side UART wrapper
-│       ├── fb.lua       ← Framebuffer (Phase 2)
-│       └── virtio.lua   ← VirtIO block device (Phase 3)
-└── rootfs/
-    ├── bin/
-    │   └── edit.lua     ← screen editor, loaded from ext2 at runtime
-    └── home/            ← user home directory, empty at build time
+│       ├── virtio.lua   ← Lua-side VirtIO block wrapper (sector read/write)
+│       └── fb.lua       ← Framebuffer driver (Phase 3)
+├── rootfs/          ← source of truth for ext2 image, copied at build time
+│   ├── bin/
+│   │   └── edit.lua     ← screen editor (ANSI, readkey, putstr)
+│   ├── etc/
+│   │   └── init.lua     ← init system (Phase 3)
+│   ├── lib/             ← shared Lua libraries (Phase 4)
+│   ├── usr/
+│   │   └── bin/         ← user-installed programs (Phase 4)
+│   ├── var/
+│   │   └── log/         ← system logs (Phase 4)
+│   └── home/            ← user home directories, empty at build time
+└── tools/
+    └── mkrd.py      ← packs nyx/ into SLNE ramdisk binary
 ```
 
 rootfs/ is the source of truth for the ext2 disk image. At build time, make strips the rootfs/ prefix and copies all files into the image at their corresponding absolute paths using e2cp and e2mkdir.
@@ -181,9 +190,10 @@ Both contain a `main()` function. Since we provide our own entry point via `entr
 
 ### Build targets
 ```bash
-make        # build selene.elf
-make run    # build + launch QEMU
-make clean  # clean artifacts
+make          # build selene.elf
+make run      # build + launch QEMU
+make clean    # clean artifacts
+make cleanall # clean even more
 ```
 
 All Lua sources under `lua/` are compiled except `lua.c` and `luac.c`, which are excluded via a filter in the Makefile since both define `main()`. The output binary is `selene.elf`.
@@ -500,22 +510,39 @@ Installing a package = putting `.lua` files on the path. The package manager its
 - [x] UART receive (keyboard input)
 
 ### Phase 3 — Usable
-- [x] VirtIO block device driver (nyx/drivers/virtio.lua)
-- [ ] Timer interrupts
-- [x] ext2 filesystem driver (nyx/fs/ext2.lua)
-- [x] VFS wired up (nyx/fs.lua stops being a stub)
-- [x] Writable filesystem unlocks self-hosting (text editor, `run()` already exists)
-- [x] /bin/ command search path on ext2 with shell builtins as fallback safety net
-- [x] Screen editor (/bin/edit.lua) — ANSI cursor control, readkey(), putstr(), ^S save, ^Q quit with unsaved-changes guard
+- [x] VirtIO block device driver (`virtio.c` + `nyx/drivers/virtio.lua`)
+- [x] ext2 filesystem driver (`nyx/fs.lua`)
+- [x] VFS wired up
+- [x] Writable filesystem unlocks self-hosting
+- [x] `/bin/` command search path on ext2 with shell builtins as fallback safety net
+- [x] Screen editor (`/bin/edit.lua`) — ANSI cursor control, `readkey()`, `putstr()`, `^S` save, `^Q` quit with unsaved-changes guard
 - [x] Self-hosting
+- [x] Recovery shell — tiered `help()`, `_mounted` flag gates post-mount commands
+- [ ] `/etc/init.lua` init system — replaces hardcoded shell launch in boot.c, spawns services
+- [ ] Timer interrupts
 - [ ] Preemptive scheduler via CLINT timer interrupts
 - [ ] Virtual memory (Sv39)
 - [ ] Process isolation (U-mode, one Lua VM per process)
-- [ ] Framebuffer
-- [ ] Package manager
+- [ ] Framebuffer (VirtIO GPU, `virtio_gpu.c` + `nyx/drivers/fb.lua`)
 
 ### Phase 4 — Ecosystem
-- [ ] Network stack
+- [ ] Package manager (`rocks.install`, `rocks.remove`, `rocks.list`, `rocks.search`)
+- [ ] Multi-user support — uid/groups table per process, login, home directories
+- [ ] Persistent user sessions
+- [ ] Inter-process communication — pass Lua tables between VMs, not raw byte streams
+- [ ] VirtIO network driver
+- [ ] TCP/IP stack (LuaSocket compatibility layer)
+- [ ] TLS (LuaSec)
+- [ ] Service supervision — restart crashed processes, dependency ordering
+
+### Phase 5 — Platform
+- [ ] Window manager — tiling WM in pure Lua on top of framebuffer
+- [ ] Self-hosting compiler toolchain (Teal or Fennel running on Selene)
+- [ ] `luarocks` compatibility layer
+- [ ] SMP — multiple RISC-V harts
+- [ ] USB input via VirtIO HID
+- [ ] Audio via VirtIO sound
+- [ ] Network-bootable image
 
 ---
 
