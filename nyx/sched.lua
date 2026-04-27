@@ -3,15 +3,9 @@
 
 local sched = {}
 
--- Process table: { id, name, co, status }
--- status: "ready" | "running" | "dead"
-local procs    = {}
-local next_pid = 1
+local procs       = {}
+local next_pid    = 1
 local current_pid = nil
-
--- ------------------------------------------------------------------ --
--- Process management                                                   --
--- ------------------------------------------------------------------ --
 
 function sched.spawn(name, fn)
     local pid = next_pid
@@ -45,35 +39,12 @@ function sched.yield()
     coroutine.yield()
 end
 
--- ------------------------------------------------------------------ --
--- Timer hook entry point                                               --
--- Called by interrupts.c lua_hook() when the CLINT fires.             --
--- Must be a global so C can reach it via lua_getglobal().             --
--- ------------------------------------------------------------------ --
-
-function sched.tick()
-    -- Only yield if we're actually inside a scheduled coroutine.
-    -- If the timer fires while the kernel itself is running (no
-    -- current process), there's nothing to preempt — ignore it.
-    -- Also check coroutine.running() to ensure we are not in the main scheduler thread
-    if current_pid ~= nil and coroutine.running() ~= nil then
-        coroutine.yield()
-    end
-end
-
--- Expose as global for the C hook
-_G.sched_tick = sched.tick
-
--- ------------------------------------------------------------------ --
--- Scheduler loop                                                       --
--- ------------------------------------------------------------------ --
-
 function sched.run()
-    timer_start()  -- arm CLINT timer now that scheduler is actually running
+    timer_start()
+
     while true do
         local any = false
 
-        -- collect pids in order so iteration is deterministic
         local pids = {}
         for pid in pairs(procs) do
             pids[#pids + 1] = pid
@@ -98,7 +69,6 @@ function sched.run()
                 elseif coroutine.status(p.co) == "dead" then
                     p.status = "dead"
                 else
-                    -- resumed fine and yielded — back to ready
                     p.status = "ready"
                 end
 
@@ -106,7 +76,6 @@ function sched.run()
             end
         end
 
-        -- Reap dead processes
         for pid, p in pairs(procs) do
             if p.status == "dead" then
                 procs[pid] = nil
@@ -114,7 +83,7 @@ function sched.run()
         end
 
         if not any then
-            timer_stop()  -- disarm CLINT timer before returning to shell
+            timer_stop()
             break
         end
     end

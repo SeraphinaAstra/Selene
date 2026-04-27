@@ -675,8 +675,8 @@ No traditional UID/GID in the kernel. Identity is a Lua-side metadata table owne
 - [x] Core coreutils in `/bin/`: ls, cat, cp, mv, rm, mkdir, cd, pwd, echo, clear, uname, df, hexdump, wc, grep
 - [x] VirtIO GPU driver (`virtio_gpu.c`) — MMIO legacy v1, full init sequence
 - [x] Framebuffer text renderer (`nyx/drivers/fb.lua`) — 8x8 bitmap font, scrolling, install/uninstall print
-- [ ] Timer interrupts
-- [ ] Preemptive scheduler via CLINT timer interrupts
+- [x] Timer interrupts
+- [x] Preemptive scheduler via CLINT timer interrupts
 - [ ] Virtual memory (Sv39)
 - [ ] Process isolation (U-mode, one Lua VM per process)
 
