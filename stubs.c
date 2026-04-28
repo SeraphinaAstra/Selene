@@ -118,6 +118,18 @@ int open(const char *pathname, int flags, ...) {
         return -1;
     }
     
+    // Check if file exists first
+    lua_getglobal(global_L, "fs");
+    lua_getfield(global_L, -1, "exists");
+    lua_pushstring(global_L, pathname);
+    
+    if (lua_pcall(global_L, 1, 1, 0) != LUA_OK || !lua_toboolean(global_L, -1)) {
+        lua_pop(global_L, 2); // pop boolean result and fs table
+        errno = ENOENT;
+        return -1;
+    }
+    lua_pop(global_L, 1); // pop exists result
+
     // Read entire file to get size (since we can't get inode)
     lua_getglobal(global_L, "fs");
     lua_getfield(global_L, -1, "read");
@@ -232,12 +244,20 @@ ssize_t write(int fd, const void *buf, size_t count) {
     size_t new_size = fd_table[fd].offset + count;
     if (new_size < current_size) new_size = current_size;
     
-    // Allocate buffer for new file content
-    char *new_buf = malloc(new_size);
-    if (!new_buf) {
-        if (read_ok) lua_pop(global_L, 1);
-        errno = ENOMEM;
-        return -1;
+    // Use stack buffer for small writes to avoid heap allocation
+    #define SMALL_WRITE_THRESHOLD 512
+    char stack_buf[SMALL_WRITE_THRESHOLD];
+    char *new_buf;
+    
+    if (new_size <= SMALL_WRITE_THRESHOLD) {
+        new_buf = stack_buf;
+    } else {
+        new_buf = malloc(new_size);
+        if (!new_buf) {
+            if (read_ok) lua_pop(global_L, 1);
+            errno = ENOMEM;
+            return -1;
+        }
     }
     
     // Copy existing data
@@ -254,7 +274,9 @@ ssize_t write(int fd, const void *buf, size_t count) {
     lua_pushstring(global_L, fd_table[fd].path);
     lua_pushlstring(global_L, new_buf, new_size);
     
-    free(new_buf);
+    if (new_size > SMALL_WRITE_THRESHOLD) {
+        free(new_buf);
+    }
     if (read_ok) lua_pop(global_L, 1); // pop read result
     
     if (lua_pcall(global_L, 2, 0, 0) != LUA_OK) {
