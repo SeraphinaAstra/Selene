@@ -22,13 +22,20 @@ Also because it's cool.
 
 ## Status
 
-Phase 1 is done. You can boot it and get a fully working interactive Lua 5.5 REPL on bare metal with:
+Phase 3 is almost complete. This is a working usable operating system, not just a proof of concept. You can boot it and get:
 
+- Full working interactive Lua 5.5 REPL shell on bare metal
 - `os.time()` and `os.clock()` backed by the CLINT hardware timer
-- `math.*` with real hardware float via rv64gc
+- Hardware floating point support
 - `peek32` / `poke32` for direct MMIO access from Lua
-- `sysinfo()` for heap and arch info
-- Backspace, error recovery, the works
+- Complete ext2 filesystem driver running on VirtIO block
+- Full read/write disk support with standard UNIX utilities
+- Working framebuffer graphics + text terminal
+- Preemptive coroutine scheduler with timer interrupts
+- Full screen text editor
+- Self-hosting environment: edit, save, compile, and run code entirely inside Selene
+- Recovery shell that works even if disk fails to mount
+- 15+ standard coreutils implemented
 
 ## Stack
 
@@ -84,9 +91,10 @@ One VM. All of them. Free.
 ## Roadmap
 
 - [x] **Phase 1** — Boot, REPL, hardware timer, MMIO access from Lua
-- [x] **Phase 2** — VFS + ramdisk, load Nyx kernel from disk, coroutine scheduler, Teal bundled
-- [ ] **Phase 3** — Framebuffer, preemptive scheduler, virtual memory (Sv39), process isolation
-- [ ] **Phase 4** — Network stack, package manager, self-hosting
+- [x] **Phase 2** — VFS + ramdisk, load Nyx kernel from disk, coroutine scheduler
+- [x] **Phase 3** — VirtIO block, ext2 filesystem, framebuffer graphics, preemptive scheduler, shell, coreutils, self-hosting editor
+- [ ] **Phase 3 remaining** — Virtual memory (Sv39), process isolation
+- [ ] **Phase 4** — Network stack, package manager, window manager
 
 ## Spec
 

@@ -93,6 +93,7 @@ The following globals are registered at boot time and available in every Lua ses
 | `readkey()` | Read one keypress, returns char or named key string |
 | `rd_find(path)` | Find a file in the ramdisk, returns string or nil |
 | `rd_list()` | List all ramdisk file paths, returns table |
+| `yield()` | Yield execution to scheduler |
 | `virtio_init()` | Initialize VirtIO block device |
 | `virtio_read_sector(n)` | Read 512-byte sector from disk |
 | `virtio_write_sector(n, data)` | Write 512-byte sector to disk |
