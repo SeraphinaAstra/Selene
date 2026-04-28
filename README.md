@@ -100,6 +100,8 @@ One VM. All of them. Free.
 
 See [`SELENE_SPEC.md`](SELENE_SPEC.md) for the full design document.
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/SeraphinaAstra/Selene)
+
 ---
 
 *Selene — Greek goddess of the moon. Lua means moon in Portuguese. It's the same thing.*
