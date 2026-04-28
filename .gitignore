@@ -5,6 +5,7 @@
 *.map
 *.bin
 *.img
+*.dtb
 
 # Lua build artifacts (in lua/)
 lua/*.o

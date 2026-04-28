@@ -67,7 +67,11 @@ run: $(TARGET) $(DISK_IMG)
 	    -serial "mon:stdio"
 
 clean:
-	rm -f $(TARGET) ramdisk.bin ramdisk.o *.o lua/*.o
+	rm -f $(TARGET) ramdisk.bin ramdisk.o *.o *.elf *.dtb *.a
+	rm -f lua/*.o lua/*.a
+	rm -f kernel/*.o
+	rm -f boot/*.o
+	rm -f libs/lualibc/src/*.o
 
 cleanall: clean
 	rm -f $(DISK_IMG)
