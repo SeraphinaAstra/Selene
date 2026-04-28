@@ -1,0 +1,27 @@
+{
+  "project_name": "Selene (Script-Native Kernel)",
+  "description": "A bare-metal RISC-V operating system where the Lua VM acts as the kernel (Nyx). It features a ~100 line C hardware shim and runs everything else in Lua/Teal.",
+  "priority_folders": [
+    "nyx",
+    "lua",
+    "rootfs"
+  ],
+  "ignore_patterns": [
+    "*.o",
+    "*.elf",
+    "*.img",
+    "*.bin",
+    "*.dtb"
+  ],
+  "repo_notes": "CRITICAL CONTEXT: This is NOT a Linux/POSIX environment. The C files (boot.c, stubs.c, interrupts.c) are low-level shims for RISC-V hardware. The 'Nyx' directory contains the actual kernel logic written in Lua/Teal. Focus documentation on how Lua interacts with hardware via peek32/poke32 MMIO and how the Lua VM is integrated into the S-mode boot process. The build system uses a custom Makefile targeting rv64gc with picolibc.",
+  "featured_pages": [
+    {
+      "title": "Kernel Specification",
+      "path": "SELENE_SPEC.md"
+    },
+    {
+      "title": "Getting Started",
+      "path": "README.md"
+    }
+  ]
+}

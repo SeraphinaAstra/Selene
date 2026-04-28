@@ -4,14 +4,6 @@
 
 No Linux. No POSIX. No libc you didn't write. Just a ~300KB Lua VM running directly on hardware, booting in milliseconds, with a live REPL as the shell.
 
-```
-> print("Hello from bare metal")
-Hello from bare metal
-> print(math.sin(math.pi / 2))
-1.0
-> peek32(0x10000000)  -- read UART register directly from Lua
-```
-
 ---
 
 ## What is this
@@ -91,10 +83,10 @@ One VM. All of them. Free.
 
 ## Roadmap
 
-- **Phase 1** ✅ Boot, REPL, hardware timer, MMIO access from Lua
-- **Phase 2** — VFS + ramdisk, load Nyx kernel from disk, coroutine scheduler, Teal bundled
-- **Phase 3** — Framebuffer, preemptive scheduler, virtual memory (Sv39), process isolation
-- **Phase 4** — Network stack, package manager, self-hosting
+- [x] **Phase 1** — Boot, REPL, hardware timer, MMIO access from Lua
+- [x] **Phase 2** — VFS + ramdisk, load Nyx kernel from disk, coroutine scheduler, Teal bundled
+- [ ] **Phase 3** — Framebuffer, preemptive scheduler, virtual memory (Sv39), process isolation
+- [ ] **Phase 4** — Network stack, package manager, self-hosting
 
 ## Spec
 
