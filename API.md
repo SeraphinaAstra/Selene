@@ -10,6 +10,8 @@ These are available at boot time in every Lua context, no require needed.
 | `poke32(addr, value)` | Write 32-bit value to MMIO register at physical address |
 | `sysinfo()` | Returns table: `{ arch, heap_kb, ramdisk_files }` |
 | `getchar()` | Read one raw byte from UART (blocks) |
+| `getchar_nb()` | Non-blocking character read. Returns character integer if available, `nil` immediately if no input |
+| `kbhit()` | Check if input is available. Returns boolean, never blocks |
 | `readline()` | Read line from UART with echo and backspace support |
 | `prompt()` | Print `> ` shell prompt |
 | `putstr(s)` | Write raw string to UART, no newline |
