@@ -6,7 +6,11 @@
 #include "lualib.h"
 #include "lauxlib.h"
 
+lua_State *global_L = NULL;
+
 extern int uart_getc(FILE *file);
+extern int uart_kbhit(FILE *file);
+extern int uart_getc_nb(FILE *file);
 extern int uart_putc(char c, FILE *file);
 extern char __heap_start;
 extern char __heap_end;
@@ -256,6 +260,21 @@ static int lua_readkey(lua_State *L) {
     return 1;
 }
 
+static int lua_kbhit(lua_State *L) {
+    lua_pushboolean(L, uart_kbhit(NULL));
+    return 1;
+}
+
+static int lua_getchar_nb(lua_State *L) {
+    int c = uart_getc_nb(NULL);
+    if (c == -1) {
+        lua_pushnil(L);
+    } else {
+        lua_pushinteger(L, c & 0xFF);
+    }
+    return 1;
+}
+
 /* --- REPL ----------------------------------------------------------- */
 
 static void repl(lua_State *L) {
@@ -312,8 +331,9 @@ void boot(void) {
     lua_State *L = luaL_newstate();
     if (!L) {
         printf("CRITICAL: Failed to init Lua state\n");
-        while (1);
+        while(1);
     }
+    global_L = L;
 
     luaL_openlibs(L);
 
@@ -327,6 +347,8 @@ void boot(void) {
     lua_register(L, "prompt",   lua_prompt);
     lua_register(L, "readkey",  lua_readkey);
     lua_register(L, "putstr",   lua_putstr);
+    lua_register(L, "kbhit",    lua_kbhit);
+    lua_register(L, "getchar_nb", lua_getchar_nb);
 
     virtio_register(L);
     virtio_gpu_register(L);
