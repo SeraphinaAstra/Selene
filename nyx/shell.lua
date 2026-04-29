@@ -1,7 +1,5 @@
 -- nyx/shell.lua
--- Selene recovery shell + interactive REPL
--- Mirrors output to UART and framebuffer.
--- Uses raw getchar() for live line editing and echoes typed input to both.
+-- Selene shell - Hybrid Lua REPL + Shell
 
 local _fs = nil
 local function getfs()
@@ -13,14 +11,12 @@ local fb = nil
 local function getfb()
     if not fb then
         fb = require("nyx.drivers.fb")
-        if fb.init then
-            pcall(fb.init)
-        end
+        if fb.init then pcall(fb.init) end
     end
     return fb
 end
 
-if _mounted == nil then _mounted = false end
+if _mounted == nil then _mounted = true end   -- we know it's mounted at boot
 if _cwd == nil then _cwd = "/" end
 
 local old_print = print
@@ -28,8 +24,7 @@ local old_print = print
 local function uart_write(s)
     s = tostring(s or "")
     if type(putstr) == "function" then
-        s = s:gsub("\n", "\r\n")
-        putstr(s)
+        putstr(s:gsub("\n", "\r\n"))
     else
         old_print(s)
     end
@@ -37,9 +32,7 @@ end
 
 local function fb_write(s)
     local m = getfb()
-    if m and m.write then
-        m.write(s)
-    end
+    if m and m.write then m.write(s) end
 end
 
 local function console_write(s)
@@ -48,74 +41,69 @@ local function console_write(s)
 end
 
 local function console_print(...)
-    local n = select("#", ...)
-    if n == 0 then
-        console_write("\n")
-        return
-    end
-
-    local parts = {}
-    for i = 1, n do
-        parts[i] = tostring(select(i, ...))
-    end
-    console_write(table.concat(parts, " ") .. "\n")
+    local t = {}
+    for i = 1, select("#", ...) do t[i] = tostring(select(i, ...)) end
+    console_write(table.concat(t, " ") .. "\n")
 end
 
 _G.print = console_print
 
-local function resolve_path(path)
-    if path:sub(1, 1) == "/" then return path end
-    if _cwd == "/" then return "/" .. path end
-    return _cwd .. "/" .. path
+-- Improved path normalization
+local function normalize_path(path)
+    if not path or path == "" then return _cwd end
+
+    -- Make absolute if needed
+    if path:sub(1,1) ~= "/" then
+        path = _cwd .. ( _cwd == "/" and "" or "/" ) .. path
+    end
+
+    local parts = {}
+    for p in path:gmatch("[^/]+") do
+        if p == ".." then
+            if #parts > 0 then table.remove(parts) end
+        elseif p ~= "." then
+            table.insert(parts, p)
+        end
+    end
+
+    local result = "/" .. table.concat(parts, "/")
+    if result == "" then result = "/" end
+    return result
 end
 
+-- Line editor
 local function fb_backspace()
     local m = getfb()
-    if m and m.backspace then
-        m.backspace()
-        return true
-    end
-    return false
+    if m and m.backspace then m.backspace() end
 end
 
 local function fb_putc(ch)
     local m = getfb()
-    if not m then return end
-    if m.putc then
-        m.putc(ch)
-    elseif m.write then
-        m.write(ch)
+    if m then
+        if m.putc then m.putc(ch) elseif m.write then m.write(ch) end
     end
 end
 
 local function tty_readline()
     local line = ""
     console_write("> ")
-
     while true do
         local c = getchar()
-        if c == nil then
-            return nil
-        end
+        if not c then return nil end
 
         if c == 13 or c == 10 then
             console_write("\n")
             return line
-
-        elseif c == 8 or c == 127 then
-            if #line > 0 then
-                line = line:sub(1, -2)
-                uart_write("\b \b")
-                fb_backspace()
-            end
-
+        elseif (c == 8 or c == 127) and #line > 0 then
+            line = line:sub(1, -2)
+            uart_write("\b \b")
+            fb_backspace()
         elseif c == 9 then
             for _ = 1, 4 do
                 line = line .. " "
                 uart_write(" ")
                 fb_putc(" ")
             end
-
         elseif c >= 32 and c < 127 then
             local ch = string.char(c)
             line = line .. ch
@@ -125,8 +113,10 @@ local function tty_readline()
     end
 end
 
+-- ====================== Built-ins ======================
+
 function mount()
-    if _mounted then print("already mounted"); return end
+    if _mounted then return print("already mounted") end
     local ok, err = getfs().mount()
     if ok then
         _mounted = true
@@ -136,151 +126,101 @@ function mount()
     end
 end
 
-function rdls()
-    local files = rd_list()
-    for _, path in ipairs(files) do print(path) end
+function cd(path)
+    if not path then
+        _cwd = "/"
+        return
+    end
+    local target = normalize_path(path)
+    if getfs().exists(target) then
+        _cwd = target
+    else
+        print("cd: no such directory: " .. target)
+    end
 end
+
+function echo(...) 
+    print(table.concat({...}, " ")) 
+end
+
+function help()
+    print("\nSelene shell")
+    print("You can type Lua code or shell commands without parentheses.\n")
+    print("Built-in commands:")
+    print("  help  mount  cd [path]  echo ...  sys  mem  ver  ps  rdls  rdread  finfo")
+    print("\nCommands from /bin/:")
+    print("  ls  cat  cp  mv  rm  mkdir  pwd  df  clear  edit  run")
+    print("  hexdump  wc  grep  snake  uname find env grep pwd tree touch whoami \n")
+    print("  tail head diff dirname basename stat ... \n")
+    print("Tip: You can also run Lua scripts directly with run <path> and pass arguments.")
+    print("Tip: Most commands work like traditional shell (no () needed).")
+end
+
+function sys()
+    local i = sysinfo()
+    print("arch: " .. i.arch)
+    print("heap: " .. i.heap_kb .. "KB")
+    print("ramdisk: " .. i.ramdisk_files)
+    print("disk: mounted")
+end
+
+function mem() print("heap: " .. sysinfo().heap_kb .. "KB") end
+function ver() print("Selene " .. (nyx and nyx.version or "0.4-dev") .. " riscv64") end
+function ps() require("nyx.proc").list() end
+function rdls() for _,f in ipairs(rd_list()) do print(f) end end
 
 function rdread(path)
+    if not path then return print("usage: rdread <path>") end
     local data = rd_find(path)
-    if data then print(data)
-    else print("rdread: not found: " .. tostring(path)) end
-end
-
-function run(path, ...)
-    local data
-    path = resolve_path(path)
-    if _mounted then
-        local f = getfs().read(path)
-        if f then data = f end
-    end
-    if not data then
-        data = rd_find(path)
-    end
-    if not data then
-        print("run: not found: " .. tostring(path))
-        return
-    end
-    local fn, err = load(data, "@" .. path)
-    if not fn then
-        print("run: " .. tostring(err))
-        return
-    end
-    local ok, res = pcall(fn, ...)
-    if not ok then print("run error: " .. tostring(res)) end
-end
-
-function fwrite(path, data)
-    if not path or not data then print("usage: fwrite(path, data)"); return end
-    local ok, err = getfs().write(path, data)
-    if not ok then print("fwrite: " .. tostring(err))
-    else print("wrote " .. #data .. " bytes to " .. path) end
+    print(data or "not found: " .. path)
 end
 
 function finfo()
     local info = getfs().info()
-    if not info then print("not mounted"); return end
-    print(string.format("blocks: %d  inodes: %d  block_size: %d  groups: %d",
-        info.blocks, info.inodes, info.block_size, info.groups))
+    if not info then return print("not mounted") end
+    print(string.format("blocks: %d  free: %d  block_size: %d", 
+        info.block_count or 0, info.free_blocks or 0, info.block_size))
 end
 
-function edit(path)
-    if not path then print("usage: edit(path)"); return end
-    if not _mounted then print("edit: disk not mounted"); return end
-    run("/bin/edit.lua", path)
-end
+-- ====================== run() - Critical Fix ======================
 
-function cd(path)
-    if not path then rawset(_G, "_cwd", "/"); return end
-    local target
-    if path:sub(1, 1) == "/" then
-        target = path
-    elseif _cwd == "/" then
-        target = "/" .. path
-    else
-        target = _cwd .. "/" .. path
+function run(path, ...)
+    if not path then return print("usage: run <path>") end
+
+    path = normalize_path(path)
+    local data = _mounted and getfs().read(path) or nil
+    if not data then
+        data = rd_find(path)
     end
-    local parts = {}
-    for part in target:gmatch("[^/]+") do
-        if part == ".." then table.remove(parts)
-        elseif part ~= "." then table.insert(parts, part) end
+
+    if not data then
+        print("run: not found: " .. path)
+        return
     end
-    target = "/" .. table.concat(parts, "/")
-    local fs = getfs()
-    if not fs.exists(target) then print("cd: not found: " .. target); return end
-    rawset(_G, "_cwd", target)
+
+    local fn, err = load(data, "@" .. path)
+    if not fn then
+        print("run: syntax error in " .. path)
+        print(err)
+        return
+    end
+
+    -- Wrap so that ... works correctly inside the script
+    local ok, res = pcall(function(...) return fn(...) end, ...)
+    if not ok then
+        print("error in " .. path .. ": " .. tostring(res))
+    elseif res ~= nil then
+        print(res)
+    end
 end
 
-function echo(...)
-    local args = {...}
-    if #args == 0 then print(""); return end
-    local parts = {}
-    for _, v in ipairs(args) do table.insert(parts, tostring(v)) end
-    print(table.concat(parts, " "))
-end
-
-function mem()
-    local info = sysinfo()
-    print("heap: " .. info.heap_kb .. "KB")
-end
-
-function sys()
-    local info = sysinfo()
-    print("arch:    " .. info.arch)
-    print("heap:    " .. info.heap_kb .. "KB")
-    print("rdfiles: " .. info.ramdisk_files)
-    print("disk:    " .. (_mounted and "mounted" or "not mounted"))
-end
-
-function ps()
-    local proc = require("nyx.proc")
-    proc.list()
-end
-
-function ver()
-    print("Selene " .. (nyx and nyx.version or "0.4-dev") .. " on riscv64")
-end
-
-function help()
-    print("")
-    print("always available:")
-    print("  sys()                    system info")
-    print("  mem()                    memory info")
-    print("  ver()                    version info")
-    print("  ps()                     process list")
-    print("  mount()                  mount ext2 filesystem")
-    print("  rdls()                   list ramdisk files")
-    print("  rdread(path)             read ramdisk file")
-    print("  run(path)                run file (disk first, ramdisk fallback)")
-    print("  cd(path)                 change directory")
-    print("  echo(...)                print arguments")
-    print("  help()                   this")
-    print("")
-    print("after mount():")
-    print("  ls(path)                 list disk directory")
-    print("  cat(path)                read disk file")
-    print("  fwrite(path, data)       write disk file")
-    print("  finfo()                  filesystem info")
-    print("  edit(path)               screen editor")
-    print("")
-    print("disk utilities (/bin/):")
-    print("  clear()                  clear screen")
-    print("  cp(src, dst)             copy file")
-    print("  df()                     disk usage stats")
-    print("  grep(pattern, path)      search text in file")
-    print("  hexdump(path)            view binary data")
-    print("  mkdir(path)              create directory")
-    print("  mv(src, dst)             move/rename file")
-    print("  pwd()                    print working directory")
-    print("  rm(path)                 remove file")
-    print("  uname()                  system information")
-    print("  wc(path)                 word/line count")
-    print("")
-    print("everything else is valid Lua")
-end
+-- ====================== Main Executor ======================
 
 local function execute_line(line)
-    local fn, err = load(line)
+    if #line == 0 then return end
+
+    -- Try as Lua first
+    local fn, err = load(line, "=stdin")
     if fn then
         local ok, res = pcall(fn)
         if not ok then
@@ -291,29 +231,41 @@ local function execute_line(line)
         return
     end
 
-    local word = line:match("^%s*(%w+)")
-    if word and _mounted then
-        local ok, runerr = pcall(run, "/bin/" .. word .. ".lua")
-        if not ok then print("unknown: " .. word) end
-    else
-        print("Error: " .. tostring(err))
+    -- Shell command
+    local parts = {}
+    for w in line:gmatch("%S+") do table.insert(parts, w) end
+
+    local cmd = parts[1]
+    local args = { table.unpack(parts, 2) }
+
+    -- Built-in command?
+    if type(_G[cmd]) == "function" then
+        local ok, res = pcall(_G[cmd], table.unpack(args))
+        if not ok then
+            print(cmd .. ": " .. tostring(res))
+        end
+        return
     end
+
+    -- Try /bin/<cmd>.lua
+    if _mounted then
+        local ok = pcall(run, "/bin/" .. cmd .. ".lua", table.unpack(args))
+        if ok then return end
+    end
+
+    print("unknown command: " .. cmd)
 end
 
 function shell_start()
     local m = getfb()
-    if m and m.clear then
-        pcall(m.clear)
-    end
+    if m and m.clear then pcall(m.clear) end
 
-    print("Selene recovery shell -- Lua is the shell")
-    print("Type help() for commands")
+    print("Selene shell -- Lua is the shell")
+    print("Type help for commands\n")
 
     while true do
         local line = tty_readline()
         if not line then break end
-        if #line > 0 then
-            execute_line(line)
-        end
+        execute_line(line)
     end
 end
