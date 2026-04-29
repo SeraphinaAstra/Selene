@@ -11,7 +11,13 @@ local fb = nil
 local function getfb()
     if not fb then
         fb = require("nyx.drivers.fb")
-        if fb.init then pcall(fb.init) end
+        if fb.init then
+            local ok = fb.init({ install_print = true })
+            if not ok then
+                -- Graphics not available, disable fb module
+                fb = nil
+            end
+        end
     end
     return fb
 end
@@ -174,7 +180,7 @@ function mem()
     print(string.format("         %d KB free", total - used))
 end
 
-function ver() print("Selene " .. (nyx and nyx.version or "0.4-dev") .. " riscv64") end
+function ver() print("Selene " .. (nyx and nyx.version or "0.5-dev") .. " riscv64") end
 function ps() require("nyx.proc").list() end
 function rdls() for _,f in ipairs(rd_list()) do print(f) end end
 

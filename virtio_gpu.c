@@ -619,11 +619,22 @@ static int lua_gpu_debug(lua_State *L) {
 }
 
 void virtio_gpu_register(lua_State *L) {
-    lua_register(L, "gpu_init",  lua_gpu_init);
-    lua_register(L, "fb_ptr",    lua_fb_ptr);
-    lua_register(L, "fb_size",   lua_fb_size);
-    lua_register(L, "fb_flush",  lua_fb_flush);
-    lua_register(L, "fb_poke",   lua_fb_poke);
-    lua_register(L, "fb_fill",   lua_fb_fill);
-    lua_register(L, "gpu_debug", lua_gpu_debug);
+    /* Only register GPU functions if device actually exists on the bus */
+    uint32_t magic   = mmio_read32(MMIO_MAGIC);
+    uint32_t version = mmio_read32(MMIO_VERSION);
+    uint32_t devid   = mmio_read32(MMIO_DEVICE_ID);
+
+    if (magic == 0x74726976 && version == 1 && devid == 16) {
+        /* Valid virtio-gpu device found, register API */
+        lua_register(L, "gpu_init",  lua_gpu_init);
+        lua_register(L, "fb_ptr",    lua_fb_ptr);
+        lua_register(L, "fb_size",   lua_fb_size);
+        lua_register(L, "fb_flush",  lua_fb_flush);
+        lua_register(L, "fb_poke",   lua_fb_poke);
+        lua_register(L, "fb_fill",   lua_fb_fill);
+        lua_register(L, "gpu_debug", lua_gpu_debug);
+        printf("virtio-gpu: device detected, functions registered\n");
+    }
+
+    /* If no device is found, register nothing. All functions will be nil. */
 }

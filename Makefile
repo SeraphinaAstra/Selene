@@ -62,6 +62,16 @@ run: $(TARGET) $(DISK_IMG)
 	    -kernel $(TARGET) \
 	    -drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
 	    -device virtio-blk-pci,drive=hd0 \
+	    -nographic
+
+run-graphics: $(TARGET) $(DISK_IMG)
+	qemu-system-riscv64 \
+	    -machine virt \
+	    -m 128M \
+	    -bios none \
+	    -kernel $(TARGET) \
+	    -drive file=$(DISK_IMG),format=raw,if=none,id=hd0 \
+	    -device virtio-blk-pci,drive=hd0 \
 	    -device virtio-gpu-device \
 	    -display sdl \
 	    -serial "mon:stdio"

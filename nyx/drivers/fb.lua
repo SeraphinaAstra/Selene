@@ -18,6 +18,7 @@ local cursor_x = 0
 local cursor_y = 0
 
 local lines = { "" }
+local available = false
 local installed = false
 local old_print = _G.print
 
@@ -106,20 +107,40 @@ setglyph("Z", {0x7E,0x04,0x08,0x10,0x20,0x40,0x7E,0})
 setglyph("?", {0x3C,0x42,0x02,0x0C,0x18,0,0x18,0})
 
 local function ensure_init()
+    if available then return true end
     if W ~= 0 and H ~= 0 then return true end
+    
+    -- Check if GPU driver functions exist
     if type(gpu_init) ~= "function" then
-        error("fb.lua: gpu_init() is not available")
-    end
-    local ok, err = pcall(gpu_init)
-    if not ok or err == nil or err == false then
-        error("fb.lua: gpu_init() failed")
+        return false
     end
     if type(fb_size) ~= "function" then
-        error("fb.lua: fb_size() is not available")
+        return false
     end
+    if type(fb_fill) ~= "function" then
+        return false
+    end
+    if type(fb_poke) ~= "function" then
+        return false
+    end
+    if type(fb_flush) ~= "function" then
+        return false
+    end
+    
+    -- Attempt to initialize GPU
+    local ok, err = pcall(gpu_init)
+    if not ok or err == nil or err == false then
+        return false
+    end
+    
     W, H = fb_size()
+    if W == 0 or H == 0 then
+        return false
+    end
+    
     COLS = math.floor(W / CHAR_W)
     ROWS = math.floor(H / CHAR_H)
+    available = true
     return true
 end
 
@@ -174,7 +195,9 @@ local function new_line()
 end
 
 function fb.init(opts)
-    ensure_init()
+    if not ensure_init() then
+        return false
+    end
     opts = opts or {}
     clear_internal()
     fb_fill(bg)

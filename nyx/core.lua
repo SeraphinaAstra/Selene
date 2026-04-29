@@ -7,7 +7,7 @@ local fs    = require("nyx.fs")
 
 local nyx = {}
 
-nyx.version = "0.4-dev"
+nyx.version = "0.5-dev"
 nyx.arch    = "riscv64"
 
 nyx.spawn   = proc.spawn
