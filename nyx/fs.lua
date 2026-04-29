@@ -10,13 +10,15 @@ local mounted = false
 -- ── Helpers ──────────────────────────────────────────────────────────
 
 local function u16(s, i)
+    if not s or i < 1 or i+1 > #s then return 0 end
     local a, b = s:byte(i, i+1)
-    return a + b*256
+    return (a or 0) + (b or 0)*256
 end
 
 local function u32(s, i)
+    if not s or i < 1 or i+3 > #s then return 0 end
     local a, b, c, d = s:byte(i, i+3)
-    return a + b*256 + c*65536 + d*16777216
+    return (a or 0) + (b or 0)*256 + (c or 0)*65536 + (d or 0)*16777216
 end
 
 local function u32_to_bytes(n)

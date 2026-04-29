@@ -26,7 +26,7 @@ while true do
 
     for i = 1, H do
         local idx = scroll + i
-        if idx > #lines then break end
+        if idx < 1 or idx > #lines then break end
         print(lines[idx])
     end
 
@@ -34,15 +34,17 @@ while true do
                                  path, scroll + H, #lines)
     putstr("\27[7m" .. status .. "\27[0m")
 
+    local max_scroll = math.max(0, #lines - H)
+    
     local key = readkey()
     if key == "q" or key == "Q" then
         break
     elseif key == " " then          -- space = page down
-        scroll = math.min(scroll + H, #lines - H)
+        scroll = math.min(scroll + H, max_scroll)
     elseif key == "b" or key == "B" then
         scroll = math.max(0, scroll - H)
     elseif key == "DOWN" then
-        scroll = math.min(scroll + 1, #lines - H)
+        scroll = math.min(scroll + 1, max_scroll)
     elseif key == "UP" then
         scroll = math.max(0, scroll - 1)
     end

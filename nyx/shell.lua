@@ -164,7 +164,16 @@ function sys()
     print("disk: mounted")
 end
 
-function mem() print("heap: " .. sysinfo().heap_kb .. "KB") end
+function mem()
+    local si = sysinfo()
+    local used = math.floor(si.heap_kb / 1024)
+    local total = 131072  -- 128MB = 131072 KB
+    local percent = math.floor((used / total) * 100 + 0.5)
+    
+    print(string.format("Memory:  %d KB used / %d KB total  (%d%%)", used, total, percent))
+    print(string.format("         %d KB free", total - used))
+end
+
 function ver() print("Selene " .. (nyx and nyx.version or "0.4-dev") .. " riscv64") end
 function ps() require("nyx.proc").list() end
 function rdls() for _,f in ipairs(rd_list()) do print(f) end end
